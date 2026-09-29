@@ -365,6 +365,12 @@ if (qs.has('cabinet')) store.set('cabinet.' + (qs.get('box') || store.get('box',
 (async () => {
   const projects = await api('/api/projects');
   partsCat = await api('/api/parts').catch(() => ({}));
+  if (!projects.length) {
+    $('tree').innerHTML = '<div class="dr">No project yet.</div><div style="padding:4px 10px" class="muted">Import Visio drawings:<br>'
+      + '<code>python -m ecad.cli import-visio &lt;folder&gt; projects/&lt;name&gt;</code><br>then reload. The 3D tab shows the library boxes.</div>';
+    document.body.dataset.ready = '1';
+    return;
+  }
   const want = store.get('project', projects[0]);
   $('project').innerHTML = projects.map((p) => `<option ${p === want ? 'selected' : ''}>${esc(p)}</option>`).join('');
   await loadProject();
