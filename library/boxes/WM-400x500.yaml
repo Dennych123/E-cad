@@ -1,0 +1,4 @@
+id: WM-400x500
+name: Wall-mount 400x500x200, 3 rows
+extends: _wall_mount
+tags: [wall_mount, generic]

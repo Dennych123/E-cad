@@ -1,0 +1,16 @@
+{
+  "name": "ecad-code",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Code-first electrical CAD: schematics, panel layout and 3D box, from YAML",
+  "scripts": {
+    "start": "node server/main.js",
+    "test": "node tests/run.js"
+  },
+  "dependencies": {
+    "js-yaml": "4.1.0",
+    "occt-import-js": "0.0.23",
+    "three": "0.186.0"
+  }
+}

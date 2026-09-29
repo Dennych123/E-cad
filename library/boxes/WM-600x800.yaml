@@ -1,0 +1,10 @@
+id: WM-600x800
+name: Wall-mount 600x800x250, 5 rows
+extends: _wall_mount
+tags: [wall_mount, generic]
+params:
+  rows: 5
+enclosure:
+  width: 600
+  height: 800
+  depth: 250

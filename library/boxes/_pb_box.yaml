@@ -1,0 +1,41 @@
+# Generic push-button box: square box with flange + separate front plate
+# carrying a grid of 16/22 mm holes. Set params.cols/rows/pitch to resize.
+abstract: true
+id: _pb_box
+name: Push-button box (generic)
+description: Small operation box, front plate with grid of pushbutton holes.
+tags: [pb_box, generic, parametric]
+params:
+  cols: 3
+  rows: 2
+  pitch_x: 30
+  pitch_y: 30
+  hole_d: 22
+  margin_x: 30
+  margin_top: 30
+  corner: 5          # corner mounting holes inset
+enclosure:
+  kind: pb_box
+  width: "=params.margin_x * 2 + params.pitch_x * (params.cols - 1)"
+  height: "=params.margin_top * 2 + params.pitch_y * (params.rows - 1)"
+  depth: 80
+  material: SPCC-SD
+  paint: MUNSELL 5Y8/1
+  thickness: {body: 2.0, plate: 1.6}
+door:
+  hinge: none
+faces:
+  front:
+    - {x: "=params.corner", y: "=params.corner", d: 6}
+    - {x: "=enclosure.width - params.corner", y: "=params.corner", d: 6}
+    - {x: "=params.corner", y: "=enclosure.height - params.corner", d: 6}
+    - {x: "=enclosure.width - params.corner", y: "=enclosure.height - params.corner", d: 6}
+hole_grids:
+  front:
+    - x0: "=params.margin_x"
+      y0: "=enclosure.height - params.margin_top"
+      pitch_x: "=params.pitch_x"
+      pitch_y: "=params.pitch_y"
+      cols: "=params.cols"
+      rows: "=params.rows"
+      d: "=params.hole_d"

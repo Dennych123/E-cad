@@ -1,0 +1,33 @@
+# Generic wall-mount steel enclosure (Rittal AE / Nitto BOX style).
+abstract: true
+id: _wall_mount
+name: Wall-mount enclosure (generic)
+description: Single-door wall-mount box with mounting plate and auto duct/rail pattern.
+tags: [wall_mount, generic, parametric]
+params:
+  plate_margin: 25
+  rows: 3
+enclosure:
+  kind: wall_mount
+  width: 400
+  height: 500
+  depth: 200
+  material: SPCC
+  paint: RAL7035
+  thickness: {body: 1.5, door: 1.5}
+  ip: IP55
+door:
+  hinge: left
+  open_angle: 120
+plate:
+  width: "=enclosure.width - 2 * params.plate_margin"
+  height: "=enclosure.height - 2 * params.plate_margin"
+  thickness: 2.0
+  offset_x: "=params.plate_margin"
+  offset_y: "=params.plate_margin"
+auto_layout:
+  rows: "=params.rows"
+  duct_w: 40
+  duct_size: W40XH60
+  side_duct_w: 40
+  side_duct_size: W40XH60

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ecad-code</title>
+<link rel="icon" href="data:,">
+<!-- three is served from node_modules by the server: works offline on factory PCs, pinned by the lockfile. -->
+<script type="importmap">
+{ "imports": { "three": "/vendor/three/build/three.module.js", "three/addons/": "/vendor/three/examples/jsm/" } }
+</script>
+<style>
+  :root { --bg:#eef0f2; --panel:#fff; --ink:#1d2126; --muted:#6b7480; --line:#d9dde2; --acc:#1a4d8f; --view:#dfe3e7; --warn:#a15c00; --hit:#ff7a00; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#15181c; --panel:#1d2126; --ink:#e6e9ed; --muted:#8e98a4; --line:#2c3238; --acc:#7fb0ff; --view:#262b31; --warn:#ffb74d; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--ink); font: 13px/1.4 system-ui, "Segoe UI", sans-serif; display: flex; flex-direction: column; }
+  header { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  header b { font-size: 15px; margin-right: 6px; }
+  .grp { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .grp[hidden] { display: none; }
+  .tabs { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .tabs button { border: 0; border-radius: 0; }
+  select, button, input { font: inherit; }
+  select, button, input[type=search] { border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 5px; padding: 3px 8px; }
+  input[type=search] { width: 220px; }
+  button.on { background: var(--acc); color: #fff; border-color: var(--acc); }
+  button:disabled { opacity: .45; }
+  main { flex: 1; display: flex; min-height: 0; }
+  nav { width: 250px; border-right: 1px solid var(--line); background: var(--panel); overflow: auto; padding: 6px 0; }
+  nav[hidden], aside[hidden], #view[hidden], #sheet[hidden] { display: none; }
+  nav .dr { padding: 6px 10px 2px; font-weight: 600; font-size: 12px; color: var(--muted); }
+  nav a { display: block; padding: 3px 10px 3px 20px; color: var(--ink); text-decoration: none; cursor: pointer; font-size: 12.5px; }
+  nav a:hover { background: var(--bg); } nav a.cur { background: var(--acc); color: #fff; }
+  #view, #sheet { flex: 1; min-width: 0; position: relative; }
+  #view { background: var(--view); }
+  #view canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  #sheet { background: #8a9199; overflow: hidden; touch-action: none; cursor: default; }
+  #sheet > svg { width: 100%; height: 100%; display: block; background: #fff; }
+  .sheet-empty { color: #fff; padding: 20px; }
+  #sheet svg .ecad-hit { fill: rgba(255,122,0,.18); stroke: var(--hit); stroke-width: 1.4; }
+  #sheet svg .ecad-focus { fill: none; stroke: #d0021b; stroke-width: 2.4; }
+  #sheet svg .ecad-net { stroke: var(--hit); stroke-width: 3; stroke-linecap: round; opacity: .85; }
+  #sheet svg .ecad-netlabel { fill: rgba(255,122,0,.25); stroke: var(--hit); stroke-width: 1; }
+  #sheet svg .ecad-band { fill: rgba(26,77,143,.12); stroke: #1a4d8f; stroke-width: .8; }
+  #hint { position: absolute; left: 10px; bottom: 8px; color: var(--muted); font-size: 12px; pointer-events: none; }
+  #sheetHint { position: absolute; left: 10px; bottom: 8px; color: #fff; font-size: 12px; pointer-events: none; text-shadow: 0 1px 2px #000; }
+  aside { width: 330px; border-left: 1px solid var(--line); background: var(--panel); overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 12px; }
+  aside section[hidden] { display: none; }
+  h3 { margin: 0 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .row input[type=range] { flex: 1; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  td { padding: 2px 4px; border-top: 1px solid var(--line); vertical-align: top; }
+  td:first-child { color: var(--muted); white-space: nowrap; }
+  .click tr { cursor: pointer; } .click tr:hover td { background: var(--bg); } .click tr.sel td { background: var(--acc); color: #fff; }
+  .key { font-size: 18px; font-weight: 700; }
+  .pill { display: inline-block; font-size: 11px; border: 1px solid var(--line); border-radius: 9px; padding: 0 7px; margin: 0 4px 4px 0; cursor: pointer; }
+  .pill:hover { border-color: var(--acc); }
+  .rev { color: var(--warn); font-size: 12px; margin: 2px 0; }
+  .muted { color: var(--muted); }
+  #results { position: absolute; z-index: 5; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; max-height: 60vh; overflow: auto; min-width: 220px; box-shadow: 0 6px 20px #0003; }
+  #results[hidden] { display: none; }
+  #results div { padding: 3px 10px; cursor: pointer; } #results div:hover { background: var(--bg); }
+  #err { color: #c0392b; }
+</style>
+</head>
+<body>
+<header>
+  <b>ecad-code</b>
+  <label>Project <select id="project"></select></label>
+  <span class="tabs"><button id="tab2d" class="on">Drawings</button><button id="tab3d">3D panel</button></span>
+  <span class="grp" id="ctl2d">
+    <input id="q" type="search" placeholder="search tag, wire, address…  (/)" autocomplete="off">
+    <button id="fit2d" title="double-click the sheet">Fit</button>
+  </span>
+  <span class="grp" id="ctl3d" hidden>
+    <label>Box <select id="box"></select></label>
+    <label>Cabinet <select id="cabinet"></select></label>
+    <button id="doorBtn" title="O">Open door</button>
+    <button id="xray" title="X">X-ray</button>
+    <button id="labels" class="on" title="L">Labels</button>
+    <button id="wiresBtn" class="on" title="W">Wires</button>
+    <button id="fit" title="Home">Fit</button>
+  </span>
+  <button id="side" title="H">Hide panel</button>
+  <span id="err"></span>
+</header>
+<div id="results" hidden></div>
+<main>
+  <nav id="tree"></nav>
+  <div id="sheet"></div>
+  <div id="view" hidden><div id="hint">drag: orbit · right-drag: pan · wheel: zoom · click a part · O door · X x-ray</div></div>
+  <aside id="aside">
+    <section id="secX">
+      <h3>Cross reference</h3>
+      <div id="xref"><span class="muted">Click a tag, wire number or address on the drawing. Click a wire to light up its net. Click an L-number to jump to that line.</span></div>
+    </section>
+    <section id="secNet" hidden><h3>Net</h3><div id="net"></div></section>
+    <section id="sec3d" hidden>
+      <h3>Door</h3>
+      <div class="row"><input id="door" type="range" min="0" max="135" value="0"><span id="doorVal">0°</span></div>
+    </section>
+    <section id="secBox" hidden><h3>Box</h3><table id="info"></table></section>
+    <section id="secSel" hidden><h3>Selected</h3><table id="sel"><tr><td>—</td></tr></table><div id="selLinks"></div></section>
+    <section id="secWires" hidden><h3>Wires <span id="wcount"></span></h3><div id="wnote" class="muted"></div><table id="wires" class="click"></table></section>
+    <section id="secParts" hidden><h3>Components <span id="count"></span></h3><table id="parts" class="click"></table></section>
+    <section id="secRev" hidden><h3>Review</h3><div id="review"></div></section>
+  </aside>
+</main>
+<script type="module" src="/web/app.js"></script>
+</body>
+</html>

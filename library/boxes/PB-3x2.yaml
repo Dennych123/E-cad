@@ -1,0 +1,4 @@
+id: PB-3x2
+name: PB box 3x2 holes 22 mm
+extends: _pb_box
+tags: [pb_box, generic]

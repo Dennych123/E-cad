@@ -1,0 +1,40 @@
+# Generic floor-standing control panel (Denso style: welded stand, single door,
+# back plate with side ducts + horizontal duct rows). Parametric: change
+# params/enclosure and the plate, ducts and rails follow.
+abstract: true
+id: _floor_stand
+name: Floor-stand panel (generic)
+description: Single-door floor-standing panel with welded stand and back plate.
+tags: [floor_stand, generic, parametric]
+params:
+  plate_margin: 30
+  rows: 5
+enclosure:
+  kind: floor_stand
+  width: 700
+  height: 1000
+  depth: 300
+  stand_height: 120
+  material: SPHC
+  paint: MUNSELL 5Y8/1
+  thickness: {body: 2.3, door: 2.3, inside_board: 2.3, stand: 3.2}
+door:
+  hinge: right
+  open_angle: 135
+  handle: A475-A2-SLV
+  handle_pos: [68, "=enclosure.height * 0.53"]
+plate:
+  width: "=enclosure.width - 2 * params.plate_margin"
+  height: "=enclosure.height - 2 * params.plate_margin"
+  thickness: 2.3
+  offset_x: "=params.plate_margin"
+  offset_y: "=params.plate_margin"
+auto_layout:
+  rows: "=params.rows"
+  duct_w: 40
+  duct_size: W40XH60
+  side_duct_w: 45
+  side_duct_size: W45XH65
+accessories:
+  - {part: A475-A2-SLV, name: Door handle, maker: TAKIGEN, face: door}
+  - {part: EARTH-PLATE-150, name: Earth plate 150, face: bottom}

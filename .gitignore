@@ -1,0 +1,13 @@
+node_modules/
+__pycache__/
+*.pyc
+out/
+**/out/
+
+# Customer projects are CONFIDENTIAL and stay on this PC: imported Visio dumps, renders, .vsdx
+# copies, and everything derived from them (project boxes, modules, cabinets, wire lists).
+# library/ holds only generic, public templates. Tests that need a project SKIP with a message.
+projects/
+
+# Maker 3D models: licence usually forbids redistribution. Convert locally with tools/step2glb.js.
+library/parts/3d/
