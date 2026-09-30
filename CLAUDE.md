@@ -13,12 +13,40 @@ Architecture decisions: `docs/ARCHITECTURE.md`. Feature checklist vs SKYCAD Elec
 - `library/` holds generic templates only. Maker 3D models (`library/parts/3d/`) are ignored too (licence).
 - Tests that need a project SKIP with a message on a fresh clone. A silent skip looks like a pass.
 
+## The drawing editor (web/editor.js)
+- A sheet is a document (`lib/sheetdoc.js`): elements in draw order, SVG points, y down. Imported Visio shapes
+  keep their original SVG markup (exact look) plus a `dx/dy` offset and their raw shapes; editor shapes
+  (wire, line, rect, ellipse, text, symbol) carry their own geometry. `elementShapes()` turns every element
+  back into raw shape records so `lib/sheetindex.js` (masks, nets, xref, ownership) runs unchanged - the
+  parity test checks every imported page indexes identically as a document.
+- Elements are immutable. Every edit swaps in a new array; undo/redo is a stack of arrays; `sync()` touches
+  only DOM nodes whose element object changed. Never mutate an element in place.
+- Documents are built from the import on first open and saved to `projects/<p>/sheets/<drawing>/<page>.json`
+  (atomic write, `rev` + 409 on conflicting saves). Only this PC may write (`--lan-edit` to allow the LAN).
+- Visio markup needs `xmlns:v`, `xmlns:xlink`, `xmlns:ev` wherever it is parsed; its export also contains the
+  background page with colliding shape ids (`shapeN-` / `groupN-`): only `foregroundPage` children are shapes.
+- Translation is display-only: `<text>` nodes are replaced in the DOM and shrunk with a transform about their
+  anchor when English runs longer; the document keeps the original text. Dictionaries: `library/i18n`
+  (generic, public) + `projects/<p>/i18n` (machine-specific, private). The Denso frame footer is a raster image.
+- Double-click: L-number references follow; everything else edits text (F2 edits a reference's text).
+- The 3D panel shares the inspector element: its listeners must check `active`.
+
+## UI rules (Emil Kowalski's design-engineering skill, github.com/emilkowalski/skills)
+- Nothing keyboard-driven animates (command palette, tool switches). Transitions < 250 ms, `--ease-out`
+  cubic-bezier(0.23,1,0.32,1); on-screen movement `--ease-in-out`. Never `transition: all`, never scale(0).
+- Pressables scale(.97) on :active; hover styles only under `(hover: hover) and (pointer: fine)`.
+- Menus/tooltips grow from their trigger (`--origin`); tooltips wait 500 ms once, then open instantly.
+- Toasts: transitions (interruptible), exit faster than enter, pause on hover and when the tab is hidden.
+- Honour `prefers-reduced-motion`. One accent (signal orange) for selection/active; teal only for nets.
+- Fonts: IBM Plex Sans / Plex Mono served from node_modules (offline). Tags, addresses, coordinates in mono.
+
 ## Web app (the product)
 ```
 npm install
 npm start                      # http://127.0.0.1:7670/  ?project=&mode=2d|3d&sheet=&key=&box=&cabinet=&door=90&xray=1
 npm test                       # node tests/run.js: unit, JS<->Python parity, real-browser clicks (Edge/Chrome over CDP)
 node tools/step2glb.js <maker.stp> --part <P/N> --front -y --up +z    # maker STEP -> GLB at real size
+node tools/extract-symbols.js <project>     # symbol library from the imported drawings (+ symbols/names.yaml curation)
 ```
 - `lib/` is shared by Node and browser, never imports three: `box.js`/`expr.js` (templates), `nets.js`
   (connectivity), `route.js` (duct routing). A net lit on screen is exactly the net a wire list is built from.

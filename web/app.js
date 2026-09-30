@@ -1,410 +1,532 @@
-// App shell: Drawings (live Visio sheets + cross-reference) and 3D panel, linked both ways.
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { buildBox } from '/web/view3d.js';
-import { createSheetView } from '/web/sheets.js';
+// App shell: project, workspace modes, sheet tree, symbol/component library, inspector, commands.
+import { createEditor } from '/web/editor.js';
+import { createPanel3D } from '/web/panel3d.js';
+import { icon } from '/web/icons.js';
+import { $, esc, toast, menu, dialog, confirmDialog, prompt, command, runCommand, openPalette, shortcutsDialog, keyLabel, slideIndicator } from '/web/ui.js';
+import { buildDict, translate, hasJapanese } from '/lib/i18n.js';
+import { PT, elementBox } from '/lib/sheetdoc.js';
 
-const $ = (id) => document.getElementById(id);
-const api = async (p) => { const r = await fetch(p); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); return j; };
-const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const store = { get: (k, d) => { try { return localStorage.getItem('ecad.' + k) ?? d; } catch { return d; } },
-  set: (k, v) => { try { localStorage.setItem('ecad.' + k, v); } catch { /* private mode */ } } };
-const project = () => $('project').value;
-const rows = (pairs) => pairs.filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('');
+const api = async (p, opt) => { const r = await fetch(p, opt); const j = await r.json(); if (!r.ok) throw Object.assign(new Error(j.error || r.status), { status: r.status }); return j; };
+const store = { get: (k, d) => { try { return localStorage.getItem('ecad.' + k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem('ecad.' + k, v); } catch { /* private */ } } };
+const qs = new URLSearchParams(location.search);
 
-// =========================================================================== mode
-let mode = '2d';
-function setMode(m) {
-  mode = m;
-  $('tab2d').classList.toggle('on', m === '2d'); $('tab3d').classList.toggle('on', m === '3d');
-  $('ctl2d').hidden = m !== '2d'; $('ctl3d').hidden = m !== '3d';
-  $('tree').hidden = m !== '2d'; $('sheet').hidden = m !== '2d'; $('view').hidden = m !== '3d';
-  for (const id of ['secX']) $(id).hidden = m !== '2d';
-  $('secNet').hidden = m !== '2d' || !$('net').innerHTML;
-  for (const id of ['sec3d', 'secBox', 'secSel', 'secWires', 'secParts', 'secRev']) $(id).hidden = m !== '3d';
-  store.set('mode', m);
-  if (m === '3d') { resize(); if (!model) loadBox(true); }
-}
-$('tab2d').onclick = () => setMode('2d');
-$('tab3d').onclick = () => setMode('3d');
-
-// =========================================================================== drawings
-const sheet = createSheetView($('sheet'), { api, project, onKey: (k, ctx) => showXref(k, ctx), onNet: showNet });
-let drawings = [];
-
-async function loadTree() {
-  drawings = await api('/api/sheets/' + encodeURIComponent(project()));
-  $('tree').innerHTML = drawings.map((d) => `<div class="dr">${esc(d.title)}</div>`
-    + d.pages.map((p) => `<a data-p="${esc(p.id)}">${esc(p.name)}</a>`).join('')).join('')
-    || '<div class="dr">no imported drawings - run import-visio</div>';
-}
-$('tree').onclick = (e) => { const a = e.target.closest('a[data-p]'); if (a) openSheet(a.dataset.p); };
-
-async function openSheet(id) {
-  await sheet.load(id);
-  document.querySelectorAll('#tree a').forEach((a) => a.classList.toggle('cur', a.dataset.p === id));
-  store.set('sheet', id);
-}
-$('fit2d').onclick = () => sheet.fit();
-
-const pageName = (pid) => {
-  for (const d of drawings) for (const p of d.pages) if (p.id === pid) return [d.title, p.name];
-  return [pid, ''];
+const state = {
+  project: null, projects: [], mode: '2d', drawings: [], symbols: [], components: [], dict: new Map(),
+  english: (qs.get('lang') || store.get('lang', 'en')) !== 'ja', sheet: null, leftTab: store.get('leftTab', 'sheets'),
+  xref: null, net: null, filter: '', openComp: null,
 };
+const project = () => state.project;
+const tr = (s) => (state.english ? translate(s, state.dict) ?? s : s);
 
-let xrefData = null;
-async function showXref(key, ctx) {
-  if (!key) { $('xref').innerHTML = '<span class="muted">nothing selected</span>'; return; }
-  if (/^L\d{3,6}$/.test(key) && ctx && !ctx.text?.row) {
-    const x = await api(`/api/xref/${encodeURIComponent(project())}?key=${encodeURIComponent(key)}`);
-    if (x.line) { await sheet.gotoLine(x.line); markTree(x.line.page); }
+// ======================================================================== static chrome
+$('#brandMark').innerHTML = icon('logo');
+$('#tab2d').innerHTML = `${icon('sheet')}<span>Drawings</span>`;
+$('#tab3d').innerHTML = `${icon('box3d')}<span>Panel 3D</span>`;
+$('#paletteBtn').innerHTML = icon('command');
+const applyTheme = (t) => { if (t === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t; $('#themeBtn').innerHTML = icon(t === 'light' ? 'sun' : t === 'dark' ? 'moon' : 'panel'); store.set('theme', t); };
+applyTheme(store.get('theme', 'system'));
+$('#themeBtn').onclick = (e) => menu([
+  { label: 'System', icon: 'panel', run: () => applyTheme('system') }, { label: 'Dark', icon: 'moon', run: () => applyTheme('dark') }, { label: 'Light', icon: 'sun', run: () => applyTheme('light') },
+], { anchor: e.currentTarget });
+const renderLang = () => { $('#langBtn').innerHTML = `<span class="mono" style="font-size:11px;font-weight:500">${state.english ? 'EN' : 'JA'}</span>`; };
+renderLang();
+
+// ======================================================================== editor + 3D
+const stage2d = $('#stage2d'), stage3d = $('#stage3d');
+const editor = createEditor(stage2d, {
+  api, project, toast,
+  onChange: (c) => { state.change = c; $('#dirtyDot').hidden = !c.dirty; renderSave(c); renderToolbar(); },
+  onSelect: (s) => { state.selection = s; renderInspector(); renderStatusSel(s); },
+  onCursor: (p) => { $('#stCursor').textContent = `x ${p.x.toFixed(1).padStart(6)}  y ${p.y.toFixed(1).padStart(6)} mm`; },
+  onNet: (n) => { state.net = n; renderInspector(); },
+  onTool: () => { renderToolbar(); renderStatusTool(); renderLibrary(); },
+  onNavigate: ({ line }) => gotoLine(line),
+});
+const panel3d = createPanel3D({ stage: stage3d, inspector: $('#inspector'), api, project, toast, onShowInDrawings: async ({ key, page, line }) => {
+  await setMode('2d');
+  if (key) return showXref(key.toUpperCase().replace(/\s+/g, ''), { jump: true });
+  if (line) return gotoLine(line, page);
+  if (page) return openSheet(page);
+} });
+
+// ======================================================================== toolbar (per mode)
+const T = (id, ic, tip, keys, on = false, disabled = false) => `<button class="ibtn ${on ? 'on' : ''}" data-cmd="${id}" data-tip="${esc(tip)}" ${keys ? `data-keys="${esc(keys)}"` : ''} ${disabled ? 'disabled' : ''} aria-label="${esc(tip)}">${icon(ic)}</button>`;
+function renderToolbar() {
+  const tb = $('#toolbar');
+  if (state.mode === '3d') {
+    const s = panel3d.state;
+    tb.innerHTML = `<div class="group"><select id="boxSel" aria-label="Box template" style="width:260px">${panel3d.boxes.map((b) => `<option value="${esc(b.id)}" ${b.id === panel3d.boxId ? 'selected' : ''}>${esc(b.id)} — ${esc(b.name)}</option>`).join('')}</select>
+      <select id="cabSel" aria-label="Cabinet" style="width:140px"><option value="">No cabinet</option>${panel3d.cabinets.map((c) => `<option ${c === panel3d.cabinetId ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div><span class="sep"></span>
+      ${T('door', 'door', s.door ? 'Close door' : 'Open door', 'O', s.door)}${T('xray', 'xray', 'X-ray', 'X', s.xray)}${T('labels', 'tag', 'Labels', 'L', s.labelsOn)}${T('wires3d', 'cable', 'Wires', 'W', s.wiresOn)}<span class="sep"></span>${T('fit3d', 'fit', 'Fit view', 'Home')}`;
+    $('#boxSel').onchange = () => { const b = $('#boxSel').value; panel3d.load(b, panel3d.cabinets.includes(b) ? b : $('#cabSel').value); setTimeout(renderToolbar, 400); };
+    $('#cabSel').onchange = () => panel3d.load($('#boxSel').value, $('#cabSel').value, false);
+    return;
   }
-  const x = xrefData = await api(`/api/xref/${encodeURIComponent(project())}?key=${encodeURIComponent(key)}`);
-  const occ = x.occurrences;
+  const t = editor.tool, sel = editor.selection.length, has = !!editor.doc;
+  tb.innerHTML = `<div class="group">${T('tool.select', 'select', 'Select', 'V', t === 'select')}${T('tool.pan', 'pan', 'Pan', 'H', t === 'pan')}</div><span class="sep"></span>
+    <div class="group">${T('tool.wire', 'wire', 'Wire', 'W', t === 'wire')}${T('tool.line', 'line', 'Line', 'L', t === 'line')}${T('tool.rect', 'rect', 'Rectangle', 'B', t === 'rect')}${T('tool.ellipse', 'ellipse', 'Ellipse', 'E', t === 'ellipse')}${T('tool.text', 'text', 'Text', 'T', t === 'text')}</div><span class="sep"></span>
+    <div class="group">${T('undo', 'undo', state.change?.undoLabel ? `Undo ${state.change.undoLabel}` : 'Undo', keyLabel('mod+z'), false, !state.change?.canUndo)}${T('redo', 'redo', 'Redo', keyLabel('mod+y'), false, !state.change?.canRedo)}</div><span class="sep"></span>
+    <div class="group">${T('rotate', 'rotate', 'Rotate 90°', keyLabel('mod+r'), false, !sel)}${T('duplicate', 'copy', 'Duplicate', keyLabel('mod+d'), false, !sel)}${T('delete', 'trash', 'Delete', 'Del', false, !sel)}${T('front', 'front', 'Bring to front', keyLabel('mod+]'), false, !sel)}${T('back', 'back', 'Send to back', keyLabel('mod+['), false, !sel)}</div>
+    ${sel > 1 ? `<span class="sep"></span><div class="group">${T('align.left', 'alignL', 'Align left')}${T('align.center', 'alignC', 'Align centre')}${T('align.right', 'alignR', 'Align right')}${T('align.top', 'alignT', 'Align top')}${T('align.middle', 'alignM', 'Align middle')}${T('align.bottom', 'alignB', 'Align bottom')}</div>` : ''}
+    <span class="sep"></span><div class="group">${T('snap', 'magnet', 'Snap', 'S', editor.snap)}${T('grid', 'grid', 'Grid', 'G', editor.grid)}${T('bg', 'layers', 'Title block', '', editor.background)}</div>
+    <span class="spacer" style="flex:1"></span>
+    <div class="group">${T('zoomOut', 'zoomOut', 'Zoom out', keyLabel('mod+-'))}<span class="zoom-read" id="zoomRead" data-tip="Zoom — click for presets">${editor.zoomPct()}%</span>${T('zoomIn', 'zoomIn', 'Zoom in', keyLabel('mod+='))}${T('fit', 'fit', 'Fit sheet', keyLabel('mod+0'))}</div><span class="sep"></span>
+    <div class="group">${T('export', 'download', 'Export SVG', '', false, !has)}${T('print', 'print', 'Print / PDF', keyLabel('mod+p'), false, !has)}<button class="btn primary" data-cmd="save" data-tip="Save" data-keys="${keyLabel('mod+s')}" ${!has ? 'disabled' : ''}>${icon('save')}Save</button></div>`;
+  $('#zoomRead').onclick = (e) => menu([50, 100, 150, 200, 400].map((p) => ({ label: p + '%', run: () => { editor.zoomToPct(p); renderZoom(); } })).concat(['-', { label: 'Fit sheet', icon: 'fit', run: () => { editor.fit(); renderZoom(); } }]), { anchor: e.currentTarget });
+}
+$('#toolbar').addEventListener('click', (e) => { const b = e.target.closest('[data-cmd]'); if (b && !b.disabled) { runCommand(b.dataset.cmd); renderToolbar(); } });
+const renderZoom = () => { const z = $('#zoomRead'); if (z) z.textContent = editor.zoomPct() + '%'; $('#stZoom').innerHTML = `${icon('zoomIn')}<span class="mono">${editor.zoomPct()}%</span>`; };
+stage2d.addEventListener('wheel', () => requestAnimationFrame(renderZoom), { passive: true });
+
+// ======================================================================== status bar
+const TOOL_NAMES = { select: 'Select', pan: 'Pan', wire: 'Wire — click points, double-click or Enter to finish, Shift = free angle', line: 'Line', rect: 'Rectangle — drag', ellipse: 'Ellipse — drag', text: 'Text — click to type', place: 'Place — click to drop, R rotates, Esc stops' };
+function renderStatusTool() { $('#stTool').innerHTML = `${icon(editor.tool === 'place' ? 'lib' : 'cursor')}<span>${esc(editor.tool === 'place' && editor.placing ? `Place ${editor.placing.sym.name} — click to drop, R rotates, Esc stops` : TOOL_NAMES[editor.tool] || editor.tool)}</span>`; }
+function renderStatusSel(s) { $('#stSel').textContent = s?.elements?.length ? `${s.elements.length} selected` : ''; }
+function renderSave(c) {
+  const d = editor.doc;
+  $('#stSave').innerHTML = !d ? '' : c.dirty ? `<span class="warn">●</span> Unsaved changes` : d.saved ? `${icon('check')}<span>Saved</span>` : `<span class="faint">Imported — not saved yet</span>`;
+}
+function renderIndexStatus() {
+  const ix = editor.index;
+  if (!ix) { $('#stIndex').textContent = ''; return; }
+  const jp = ix.texts.filter((t) => hasJapanese(t.text) && !translate(t.text, state.dict)).length;
+  $('#stIndex').innerHTML = `<span>${ix.texts.length} texts · ${ix.segs.length} wire segments · ${ix.rows.length} lines</span>${state.english ? `<span class="${jp ? 'warn' : 'ok'}">${jp ? jp + ' untranslated' : 'English'}</span>` : ''}`;
+}
+
+// ======================================================================== workspace mode
+async function setMode(m) {
+  if (m === state.mode && (m === '2d' || !stage3d.hidden)) return;
+  state.mode = m;
+  store.set('mode', m);
+  for (const b of $('#modeSeg').querySelectorAll('button')) b.setAttribute('aria-selected', String(b.dataset.mode === m));
+  slideIndicator($('#modeSeg'));
+  stage2d.hidden = m !== '2d'; stage3d.hidden = m !== '3d';
+  $('#main').classList.toggle('no-left', m === '3d' || !leftOpen);
+  $('#search').parentElement.hidden = m === '3d';
+  for (const id of ['#stCursor', '#stZoom', '#stTool', '#stSel', '#stIndex', '#stSave', '.crumbs']) $(id).hidden = m === '3d';
+  if (m === '3d') { panel3d.activate().then(renderToolbar); } else { panel3d.deactivate(); renderInspector(); }
+  renderToolbar();
+}
+$('#modeSeg').onclick = (e) => { const b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); };
+
+// ======================================================================== left pane
+let leftOpen = true, rightOpen = true;
+function setLeftTab(t) {
+  state.leftTab = t; store.set('leftTab', t);
+  for (const b of $('#leftTabs').querySelectorAll('button')) b.setAttribute('aria-selected', String(b.dataset.tab === t));
+  slideIndicator($('#leftTabs'));
+  renderLeft();
+}
+$('#leftTabs').onclick = (e) => { const b = e.target.closest('[data-tab]'); if (b) setLeftTab(b.dataset.tab); };
+
+function renderLeft() {
+  const tools = $('#leftTools');
+  if (state.leftTab === 'sheets') {
+    tools.innerHTML = `<input type="search" placeholder="Filter sheets" id="leftFilter" value="${esc(state.filter)}" aria-label="Filter sheets"><button class="ibtn" data-act="newSheet" data-tip="New sheet">${icon('plus')}</button>`;
+  } else {
+    tools.innerHTML = `<input type="search" placeholder="${state.leftTab === 'symbols' ? 'Search symbols' : 'Search part no., maker, tag'}" id="leftFilter" value="${esc(state.filter)}" aria-label="Filter">`;
+  }
+  $('#leftFilter').oninput = (e) => { state.filter = e.target.value; renderLeftBody(); };
+  renderLeftBody();
+}
+function renderLeftBody() {
+  if (state.leftTab === 'sheets') renderTree(); else if (state.leftTab === 'symbols') renderLibrary(); else renderComponents();
+}
+
+function renderTree() {
+  const q = state.filter.trim().toLowerCase();
+  const html = state.drawings.map((d) => {
+    const pages = d.pages.filter((p) => !q || `${d.title} ${tr(p.name)} ${p.name}`.toLowerCase().includes(q));
+    if (!pages.length) return '';
+    return `<div class="drawing"><span>${esc(d.title)}</span><span class="n">${pages.length}</span></div>` + pages.map((p) =>
+      `<a data-p="${esc(p.id)}" ${p.id === state.sheet ? 'aria-current="page"' : ''} title="${esc(p.name)}">${icon(p.source === 'import' ? 'sheet' : 'sheetEdit')}<span class="nm">${esc(tr(p.name))}</span>${p.source !== 'import' ? `<span class="badge">${p.source === 'new' ? 'new' : 'edited'}</span>` : ''}</a>`).join('');
+  }).join('');
+  $('#leftBody').innerHTML = `<div class="tree">${html || '<div class="empty">No sheets match.</div>'}</div>`;
+}
+
+function symbolPreview(s) {
+  const [w, h] = s.size, pad = Math.max(w, h) * 0.08 + 0.8, W = Math.max(w, 1) + pad * 2, H = Math.max(h, 1) + pad * 2;
+  const sw = Math.max(W, H) / 60;
+  const pts = (p) => p.pts.map(([x, y]) => `${(x + pad).toFixed(2)},${(H - pad - y).toFixed(2)}`).join(' ');
+  return `<svg viewBox="0 0 ${W.toFixed(2)} ${H.toFixed(2)}" preserveAspectRatio="xMidYMid meet">${s.paths.map((p) => p.closed
+    ? `<polygon points="${pts(p)}" fill="${p.fill ? 'currentColor' : 'none'}" fill-opacity=".12" stroke="${p.stroke === false ? 'none' : 'currentColor'}" stroke-width="${sw}"/>`
+    : `<polyline points="${pts(p)}" fill="none" stroke="currentColor" stroke-width="${sw}"/>`).join('')}${s.pins.map((p) => `<circle cx="${p.at[0] + pad}" cy="${H - pad - p.at[1]}" r="${sw * 1.6}" fill="var(--net)"/>`).join('')}</svg>`;
+}
+const CAT_ORDER = ['custom', 'contacts', 'relays', 'coils', 'operator', 'sensors', 'protection', 'terminals', 'wiring', 'references', 'annotations', 'flowchart', 'basic', 'dimensions', 'mechanical', 'other'];
+function renderLibrary() {
+  if (state.leftTab !== 'symbols') return;
+  const q = state.filter.trim().toLowerCase();
+  const armed = editor.placing?.sym?.id;
+  const groups = new Map();
+  for (const s of state.symbols) if (!q || `${s.name} ${s.category} ${s.master || ''}`.toLowerCase().includes(q)) { if (!groups.has(s.category)) groups.set(s.category, []); groups.get(s.category).push(s); }
+  const html = [...groups].sort((a, b) => CAT_ORDER.indexOf(a[0]) - CAT_ORDER.indexOf(b[0])).map(([cat, list]) =>
+    `<div class="lib-cat"><span>${esc(cat)}</span><span class="n">${list.length}</span></div><div class="lib-grid">${list.map((s) =>
+      `<div class="sym ${s.id === armed ? 'armed' : ''}" draggable="true" data-sym="${esc(s.id)}" title="${esc(s.name)}${s.master ? ' · Visio master ' + esc(s.masterEn || s.master) : ''} · used ${s.count}× in this project">${symbolPreview(s)}<span class="nm">${esc(s.name)}</span></div>`).join('')}</div>`).join('');
+  $('#leftBody').innerHTML = html || `<div class="empty">${state.symbols.length ? 'No symbol matches.' : 'No symbol library yet. Run <span class="mono">node tools/extract-symbols.js ' + esc(project() || '<project>') + '</span>.'}</div>`;
+}
+$('#leftBody').addEventListener('click', async (e) => {
+  const a = e.target.closest('[data-p]');
+  if (a) return openSheet(a.dataset.p);
+  const s = e.target.closest('[data-sym]');
+  if (s) { const sym = state.symbols.find((x) => x.id === s.dataset.sym); if (state.mode !== '2d') await setMode('2d'); editor.startPlace(sym); return; }
+  const c = e.target.closest('[data-comp]');
+  if (c) { state.openComp = state.openComp === c.dataset.comp ? null : c.dataset.comp; renderComponents(); return; }
+  const place = e.target.closest('[data-place]');
+  if (place) { const sym = state.symbols.find((x) => x.id === place.dataset.place); if (sym) { editor.startPlace(sym, { tag: place.dataset.tag || null }); toast(`Placing ${sym.name}${place.dataset.tag ? ' as ' + place.dataset.tag : ''} — click on the sheet`, { kind: 'info', duration: 2200 }); } return; }
+  const k = e.target.closest('[data-key]');
+  if (k) return showXref(k.dataset.key, { jump: true });
+});
+$('#leftBody').addEventListener('dragstart', (e) => { const s = e.target.closest('[data-sym]'); if (s) { e.dataTransfer.setData('text/x-ecad-symbol', s.dataset.sym); e.dataTransfer.effectAllowed = 'copy'; } });
+stage2d.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('text/x-ecad-symbol')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
+stage2d.addEventListener('drop', (e) => {
+  const id = e.dataTransfer.getData('text/x-ecad-symbol'); if (!id || !editor.doc) return;
+  e.preventDefault();
+  const sym = state.symbols.find((x) => x.id === id);
+  if (sym) editor.dropSymbol(sym, e.clientX, e.clientY);
+});
+
+function renderComponents() {
+  const q = state.filter.trim().toLowerCase();
+  const list = state.components.filter((c) => !q || `${c.part} ${c.maker || ''} ${c.category} ${c.name || ''} ${c.tags.join(' ')}`.toLowerCase().includes(q));
+  let cat = null;
+  $('#leftBody').innerHTML = list.map((c) => {
+    const head = c.category !== cat ? `<div class="lib-cat"><span>${esc((cat = c.category))}</span></div>` : '';
+    const open = state.openComp === c.part;
+    const det = open ? `<div style="grid-column:1/-1;margin-top:8px">
+        <div class="kv">${c.footprint ? `<span>Footprint</span><span class="mono">${c.footprint[0]} × ${c.footprint[1]} mm</span>` : ''}<span>Source</span><span>${esc(c.sources.join(', '))}</span>${c.model ? `<span>3D model</span><span>${icon('box3d')} yes</span>` : ''}</div>
+        ${c.tags.length ? `<div style="margin-top:8px">${c.tags.slice(0, 24).map((t) => `<span class="chip" data-key="${esc(t.toUpperCase())}">${esc(t)}</span>`).join('')}</div>` : ''}
+        ${c.sheets.length ? `<div class="faint" style="margin-top:6px">Written on ${c.sheets.length} sheet(s)</div>` : ''}
+        ${c.symbols.length ? `<div class="row" style="margin-top:8px;flex-wrap:wrap">${c.symbols.map((sid) => { const s = state.symbols.find((x) => x.id === sid); return s ? `<button class="btn solid" data-place="${esc(s.id)}">${icon('plus')}${esc(s.name)}</button>` : ''; }).join('')}</div>` : ''}
+      </div>` : '';
+    return `${head}<div class="comp ${open ? 'open' : ''}" data-comp="${esc(c.part)}"><span class="pn">${esc(c.part)}</span><span class="mk">${esc(c.maker || '')}</span>${c.name ? `<span class="ds">${esc(c.name)}</span>` : ''}${det}</div>`;
+  }).join('') || '<div class="empty">No components match.</div>';
+}
+
+// ======================================================================== inspector (drawings)
+const num = (v) => (Math.round(v * 10) / 10).toFixed(1);
+function renderInspector() {
+  if (state.mode !== '2d') return;
+  const el = $('#inspector');
+  const doc = editor.doc, s = state.selection;
+  if (!doc) { el.innerHTML = '<div class="empty">Open a sheet from the left.</div>'; return; }
+  let html = '';
+  const list = s?.elements || [];
+  if (!list.length) {
+    const ix = editor.index;
+    html += `<div class="section"><h4>Sheet</h4><div class="kv"><span>Name</span><span>${esc(tr(doc.name))}</span><span>Size</span><span class="mono">${num(doc.widthMm)} × ${num(doc.heightMm)} mm</span><span>Shapes</span><span>${doc.elements.length}</span><span>State</span><span>${editor.dirty ? 'Unsaved changes' : doc.saved ? 'Saved' : 'Imported, not saved yet'}</span>${ix ? `<span>Lines</span><span>${ix.rows.length ? `${esc(ix.rows[0].label)} … ${esc(ix.rows.at(-1).label)}` : '—'}</span>` : ''}</div>
+      <div class="row" style="margin-top:12px"><button class="btn solid" data-act="rename">${icon('text')}Rename</button>${doc.saved && doc.source === null ? `<button class="btn solid danger" data-act="deleteSheet">${icon('trash')}Delete</button>` : ''}</div></div>
+      <div class="section"><h4>Tips</h4><div class="faint" style="line-height:1.6">Click a shape to see its cross-reference and net. Double-click text to edit it, or an L-number arrow to jump to that line. Drag symbols in from the Symbols tab. <kbd>${keyLabel('mod+k')}</kbd> lists every command.</div></div>`;
+  } else if (list.length > 1) {
+    html += `<div class="section"><h4>Selection <span class="count">${list.length}</span></h4><div class="row" style="flex-wrap:wrap">${['left', 'center', 'right', 'top', 'middle', 'bottom'].map((k) => `<button class="ibtn" data-cmd="align.${k}" data-tip="Align ${k}">${icon('align' + { left: 'L', center: 'C', right: 'R', top: 'T', middle: 'M', bottom: 'B' }[k])}</button>`).join('')}</div>
+      <div class="faint" style="margin-top:8px">${Object.entries(list.reduce((a, e) => ((a[e.kind] = (a[e.kind] || 0) + 1), a), {})).map(([k, n]) => `${n} ${k}`).join(' · ')}</div></div>`;
+  } else {
+    html += propsOf(list[0], doc);
+  }
+  // cross-reference for the selected shape's identifiers
+  const keys = [...new Set((s?.texts || []).flatMap((t) => t.keys))].slice(0, 6);
+  if (keys.length) html += `<div class="section"><h4>Identifiers</h4>${keys.map((k) => `<span class="chip ${state.xref?.key === k ? 'net' : ''}" data-key="${esc(k)}">${esc(k)}</span>`).join('')}</div>`;
+  if (state.xref) html += xrefHtml(state.xref);
+  if (state.net) html += `<div class="section"><h4>${icon('net')} Net</h4><div class="faint" style="margin-bottom:6px">${state.net.segments} wire segment(s) connected${state.net.devices.length ? ' · ends at ' + state.net.devices.map(esc).join(', ') : ''}</div>${state.net.labels.map((k) => `<span class="chip net" data-key="${esc(k)}">${esc(k)}</span>`).join('') || '<span class="faint">No label on this net.</span>'}</div>`;
+  el.innerHTML = html;
+}
+function propsOf(e, doc) {
+  const [bx, by, bw, bh] = elementBox(e, doc);
+  const xmm = num(bx / PT), ymm = num((doc.height - by - bh) / PT);
+  const pos = `<span>Position</span><span class="row"><input class="mono" type="number" step="0.5" value="${xmm}" data-prop="x" aria-label="X mm" style="width:84px"><input class="mono" type="number" step="0.5" value="${ymm}" data-prop="y" aria-label="Y mm" style="width:84px"></span>`;
+  const size = `<span>Size</span><span class="mono">${num(bw / PT)} × ${num(bh / PT)} mm</span>`;
+  const K = { visio: 'Imported shape', wire: 'Wire', line: 'Line', rect: 'Rectangle', ellipse: 'Ellipse', text: 'Text', symbol: 'Symbol' };
+  let rows = '';
+  if (e.kind === 'symbol') rows = `<span>Symbol</span><span>${esc(e.name)}</span><span>Tag</span><span><input class="mono" type="text" value="${esc(e.tag || '')}" data-prop="tag" aria-label="Tag"></span><span>Part no.</span><span><input class="mono" type="text" list="partList" value="${esc(e.part || '')}" data-prop="part" aria-label="Part number" placeholder="from the catalogue"></span><span>Rotation</span><span><select data-prop="rot" aria-label="Rotation">${[0, 90, 180, 270].map((r) => `<option ${r === (e.rot || 0) ? 'selected' : ''} value="${r}">${r}°</option>`).join('')}</select></span>${pos}${size}<span>Pins</span><span>${e.pins?.length || 0}</span>`;
+  else if (e.kind === 'text') rows = `<span>Text</span><span><textarea data-prop="text" rows="${Math.min(6, e.text.split('\n').length + 1)}" aria-label="Text">${esc(e.text)}</textarea></span><span>Size</span><span><input class="mono" type="number" min="3" max="72" step="0.5" value="${e.size}" data-prop="size" aria-label="Font size" style="width:84px"> pt</span>${pos}`;
+  else if (e.kind === 'wire' || e.kind === 'line') { let L = 0; for (let i = 1; i < e.pts.length; i++) L += Math.hypot(e.pts[i][0] - e.pts[i - 1][0], e.pts[i][1] - e.pts[i - 1][1]); rows = `<span>Points</span><span>${e.pts.length}</span><span>Length</span><span class="mono">${num(L / PT)} mm</span><span>Weight</span><span><input class="mono" type="number" min="0.1" max="5" step="0.1" value="${e.width ?? 0.72}" data-prop="width" aria-label="Line weight" style="width:84px"> pt</span>${pos}`; }
+  else if (e.kind === 'visio') {
+    const texts = (e.shapes || []).filter((x) => x.text).map((x) => x.text);
+    rows = `<span>Master</span><span>${esc(e.master ? tr(e.master.replace(/\.\d+$/, '')) : '—')}</span>${texts.length ? `<span>Text</span><span>${texts.slice(0, 4).map((t) => `<div class="mono" style="white-space:pre-wrap">${esc(tr(t))}</div>`).join('')}</span>` : ''}${pos}${size}`;
+  } else rows = `${pos}${size}<span>Weight</span><span><input class="mono" type="number" min="0.1" max="5" step="0.1" value="${e.width ?? 0.72}" data-prop="width" aria-label="Line weight" style="width:84px"> pt</span>`;
+  return `<div class="section"><h4>${esc(K[e.kind] || e.kind)} <span class="count mono">#${e.id}</span></h4><div class="kv">${rows}</div></div>`;
+}
+function xrefHtml(x) {
+  const occ = x.occurrences || [];
   const roles = [...new Set(occ.map((o) => o.role).filter(Boolean))];
-  let html = `<div class="key">${esc(key)}</div><div class="muted">${occ.length} place(s) on ${new Set(occ.map((o) => o.page)).size} sheet(s)${roles.length ? ' · ' + esc(roles.join(', ')) : ''}</div>`;
-  if (x.line) html += `<div style="margin:6px 0"><span class="pill" data-line="1">go to line ${esc(key)}</span></div>`;
-  html += '<table class="click" id="occ">' + occ.map((o, i) => {
-    const [dr, pn] = pageName(o.page);
-    return `<tr data-i="${i}"><td>${esc(o.line || (o.row ? 'row' : '—'))}</td><td>${esc(dr)} · ${esc(pn)}${o.role ? ` <span class="muted">(${esc(o.role)})</span>` : ''}</td></tr>`;
-  }).join('') + '</table>';
-  if (x.cabinet.length) html += '<h3 style="margin-top:10px">In panel</h3>' + x.cabinet.map((c, i) =>
-    `<span class="pill" data-cab="${i}">3D: ${esc(c.cabinet)} · ${esc(c.tag)}${c.part ? ' · ' + esc(c.part) : ''}</span>`).join('');
-  $('xref').innerHTML = html;
-  const cur = ctx?.text ? occ.findIndex((o) => o.page === ctx.page && o.id === ctx.text.id) : -1;
-  if (cur >= 0) $('occ').rows[cur].classList.add('sel');
-  if (!ctx) goOcc(0);
+  const nm = (pid) => { for (const d of state.drawings) for (const p of d.pages) if (p.id === pid) return `${d.title} · ${tr(p.name)}`; return pid; };
+  return `<div class="section"><h4>${icon('search')} Cross reference</h4><div class="key-title">${esc(x.key)}</div><div class="faint" style="margin:2px 0 8px">${occ.length} place${occ.length === 1 ? '' : 's'} on ${new Set(occ.map((o) => o.page)).size} sheet(s)${roles.length ? ' · ' + roles.map(esc).join(', ') : ''}</div>
+    ${x.line ? `<button class="btn solid" data-act="gotoLine" style="margin-bottom:8px">${icon('chevron')}Go to line ${esc(x.key)}</button>` : ''}
+    ${occ.map((o, i) => `<div class="occ" data-occ="${i}" ${state.xrefActive === i ? 'aria-current="true"' : ''}><span class="ln">${esc(o.line || (o.row ? 'row' : '—'))}</span><span class="wh">${esc(nm(o.page))}</span>${o.role ? `<span class="rl">${esc(o.role)}</span>` : ''}</div>`).join('')}
+    ${x.cabinet?.length ? `<div style="margin-top:10px">${x.cabinet.map((c, i) => `<button class="btn solid" data-cab="${i}">${icon('box3d')}Show in 3D · ${esc(c.cabinet)}</button>`).join('')}</div>` : ''}</div>`;
+}
+$('#inspector').addEventListener('change', (e) => {
+  const p = e.target.dataset.prop; if (!p || state.mode !== '2d') return;
+  const [el] = editor.selection; if (!el) return;
+  const v = e.target.value, doc = editor.doc;
+  if (p === 'x' || p === 'y') {
+    const [bx, by, , bh] = elementBox(el, doc);
+    const want = Number(v) * PT;
+    const dx = p === 'x' ? want - bx : 0, dy = p === 'y' ? (doc.height - want - bh) - by : 0;
+    editor.select([el.id]); editor.nudge(+dx.toFixed(2), +dy.toFixed(2));
+  } else if (p === 'rot') editor.update(el.id, { rot: Number(v) }, 'Rotate');
+  else if (p === 'tag') editor.update(el.id, { tag: v.trim() }, 'Edit tag');
+  else if (p === 'part') editor.update(el.id, { part: v.trim().toUpperCase() || undefined }, 'Set part number');
+  else if (p === 'text') editor.update(el.id, { text: v }, 'Edit text');
+  else if (p === 'size' || p === 'width') editor.update(el.id, { [p]: Number(v) }, 'Edit ' + p);
+});
+$('#inspector').addEventListener('click', async (e) => {
+  if (state.mode !== '2d') return;
+  const cmd = e.target.closest('[data-cmd]'); if (cmd) return runCommand(cmd.dataset.cmd);
+  const k = e.target.closest('[data-key]'); if (k) return showXref(k.dataset.key);
+  const o = e.target.closest('[data-occ]'); if (o) return goOcc(Number(o.dataset.occ));
+  const a = e.target.closest('[data-act]');
+  if (a?.dataset.act === 'gotoLine') return gotoLine(state.xref.key);
+  if (a?.dataset.act === 'rename') return runCommand('rename');
+  if (a?.dataset.act === 'deleteSheet') return runCommand('deleteSheet');
+  const c = e.target.closest('[data-cab]');
+  if (c) { const cab = state.xref.cabinet[Number(c.dataset.cab)]; await setMode('3d'); await panel3d.load(cab.cabinet, cab.cabinet); panel3d.selectTag(cab.tag); renderToolbar(); }
+});
+
+// ======================================================================== cross-reference / navigation
+async function showXref(key, { jump = false } = {}) {
+  state.xref = await api(`/api/xref/${encodeURIComponent(project())}?key=${encodeURIComponent(key)}`);
+  state.xrefActive = null;
+  renderInspector();
+  if (jump && state.xref.occurrences.length) goOcc(0);
 }
 async function goOcc(i) {
-  const o = xrefData.occurrences[i];
-  if (!o) return;
-  await sheet.focus(o.page, o.id, xrefData.key);
-  markTree(o.page);
-  [...$('occ').rows].forEach((r, k) => r.classList.toggle('sel', k === i));
+  const o = state.xref?.occurrences[i]; if (!o) return;
+  if (o.page !== state.sheet && !(await openSheet(o.page))) return;
+  state.xrefActive = i;
+  editor.focusShape(o.id, state.xref.key);
+  renderInspector();
 }
-function markTree(pid) { document.querySelectorAll('#tree a').forEach((a) => a.classList.toggle('cur', a.dataset.p === pid)); }
-$('xref').onclick = async (e) => {
-  const tr = e.target.closest('tr[data-i]');
-  if (tr) return goOcc(Number(tr.dataset.i));
-  if (e.target.closest('[data-line]')) { await sheet.gotoLine(xrefData.line); return markTree(xrefData.line.page); }
-  const cab = e.target.closest('[data-cab]');
-  if (cab) {
-    const c = xrefData.cabinet[Number(cab.dataset.cab)];
-    await show3D(c.cabinet, c.tag);
-  }
-};
-
-function showNet(n) {
-  $('secNet').hidden = false;
-  $('net').innerHTML = `<div>${n.segments} wire segment(s) connected</div>`
-    + (n.labels.length ? '<div style="margin-top:4px">' + n.labels.map((k) => `<span class="pill" data-k="${esc(k)}">${esc(k)}</span>`).join('') + '</div>'
-      : '<div class="muted">no label on this net</div>');
+async function gotoLine(label, preferPage = null) {
+  const x = await api(`/api/xref/${encodeURIComponent(project())}?key=${encodeURIComponent(label)}`);
+  const ref = x.line;
+  if (!ref) { if (preferPage) await openSheet(preferPage); toast(`Line ${label} is not on any sheet`, { kind: 'err' }); return; }
+  if (ref.page !== state.sheet && !(await openSheet(ref.page))) return;
+  editor.gotoRow(ref);
+  state.xref = x; renderInspector();
 }
-$('net').onclick = (e) => { const p = e.target.closest('[data-k]'); if (p) showXref(p.dataset.k); };
 
-// search
+// ======================================================================== sheets
+async function guardUnsaved() {
+  if (!editor.dirty) return true;
+  const r = await dialog({ title: 'Save changes to this sheet?', body: `"${tr(editor.doc.name)}" has unsaved changes.`, actions: [{ label: 'Cancel', value: 'cancel', cancel: true }, { label: "Don't save", value: 'discard' }, { label: 'Save', value: 'save', primary: true }] });
+  if (r === 'save') { try { await editor.save(); return true; } catch (e) { toast(e.message, { kind: 'err' }); return false; } }
+  return r === 'discard';
+}
+async function openSheet(id, { force = false } = {}) {
+  if (id === state.sheet && !force) return true;
+  if (!(await guardUnsaved())) return false;
+  try {
+    await editor.open(id);
+  } catch (e) { toast(e.message, { kind: 'err' }); return false; }
+  state.sheet = id; store.set('sheet.' + project(), id);
+  state.net = null;
+  const dr = state.drawings.find((d) => d.pages.some((p) => p.id === id));
+  $('#crumbDrawing').textContent = dr?.title || '';
+  $('#sheetName').textContent = tr(editor.doc.name);
+  $('#crumbChev').innerHTML = icon('chevron'); $('#crumbChev2').innerHTML = icon('chevron');
+  if (state.leftTab === 'sheets') renderTree();
+  renderToolbar(); renderZoom(); renderIndexStatus(); renderInspector();
+  history.replaceState(null, '', `?project=${encodeURIComponent(project())}&sheet=${encodeURIComponent(id)}`);
+  return true;
+}
+async function refreshDrawings() { state.drawings = await api('/api/sheets/' + encodeURIComponent(project())); if (state.leftTab === 'sheets') renderTree(); }
+
+// ======================================================================== search
 let searchT = null;
-$('q').oninput = () => {
+$('#search').oninput = () => {
   clearTimeout(searchT);
   searchT = setTimeout(async () => {
-    const q = $('q').value.trim();
-    if (q.length < 2) { $('results').hidden = true; return; }
+    const q = $('#search').value.trim(), box = $('#searchResults');
+    if (q.length < 2) { box.hidden = true; return; }
     const res = await api(`/api/search/${encodeURIComponent(project())}?q=${encodeURIComponent(q)}`);
-    const r = $('q').getBoundingClientRect();
-    Object.assign($('results').style, { left: r.left + 'px', top: r.bottom + 2 + 'px' });
-    $('results').innerHTML = res.map((x) => `<div data-k="${esc(x.key)}"><b>${esc(x.key)}</b> <span class="muted">${x.n}×</span></div>`).join('') || '<div class="muted">no match</div>';
-    $('results').hidden = false;
-  }, 120);
+    const r = $('#search').getBoundingClientRect();
+    Object.assign(box.style, { left: r.left + 'px', top: r.bottom + 6 + 'px', width: Math.max(r.width, 260) + 'px' });
+    box.innerHTML = res.map((x, i) => `<button data-k="${esc(x.key)}" ${i === 0 ? 'data-active' : ''}><span class="mono">${esc(x.key)}</span><kbd>${x.n}</kbd></button>`).join('') || '<div class="empty">No match</div>';
+    box.hidden = false; box.style.setProperty('--origin', 'top left');
+    requestAnimationFrame(() => { box.dataset.state = 'open'; });
+  }, 110);
 };
-$('q').onkeydown = (e) => { if (e.key === 'Enter') { const f = $('results').querySelector('[data-k]'); if (f) f.click(); } if (e.key === 'Escape') $('results').hidden = true; };
-$('results').onclick = (e) => { const d = e.target.closest('[data-k]'); if (d) { $('results').hidden = true; $('q').value = d.dataset.k; showXref(d.dataset.k); } };
-document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#results,#q')) $('results').hidden = true; });
-
-// =========================================================================== 3D
-const view = $('view');
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-view.prepend(renderer.domElement);
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(35, 1, 5, 50000);
-camera.up.set(0, 0, 1);
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8a80, 1.6));
-const sun = new THREE.DirectionalLight(0xffffff, 1.6);
-sun.position.set(-1500, -2500, 3000);
-scene.add(sun);
-let grid = null;
-function setGrid(size) {
-  if (grid) { scene.remove(grid); grid.geometry.dispose(); }
-  const step = 10 ** Math.floor(Math.log10(size / 10));
-  const n = Math.ceil(size / step);
-  grid = new THREE.GridHelper(n * step, n, 0x8f969d, 0xb9bec3);
-  grid.rotation.x = Math.PI / 2;
-  scene.add(grid);
-}
-const applyTheme = () => { scene.background = new THREE.Color(getComputedStyle(document.documentElement).getPropertyValue('--view').trim() || '#dfe3e7'); };
-applyTheme();
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
-
-function resize() {
-  const w = view.clientWidth, h = view.clientHeight;
-  if (!w || !h) return;
-  renderer.setSize(w, h, false);
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
-}
-new ResizeObserver(resize).observe(view);
-
-let model = null, box = null, cabinet = null, selected = null, wires = [], wireMeshes = [], partsCat = {};
-let doorDeg = 0, doorTarget = 0, xray = false, labelsOn = true, wiresOn = true;
-
-function fit() {
-  if (!model) return;
-  const b = model.bounds, c = b.getCenter(new THREE.Vector3()), s = b.getSize(new THREE.Vector3());
-  const r = Math.max(s.x, s.y, s.z);
-  controls.target.copy(c);
-  camera.position.set(c.x + r * 0.9, c.y - r * 1.9, c.z + r * 0.7);
-  camera.near = r / 200; camera.far = r * 50; camera.updateProjectionMatrix();
-  setGrid(r * 3);
-  grid.position.set(c.x, c.y, 0);
-}
-
-function rebuild(refit) {
-  if (model) { scene.remove(model.root); model.root.traverse((o) => { o.geometry?.dispose(); }); }
-  selected = null;
-  model = buildBox(box, cabinet, { labels: labelsOn, parts: partsCat });
-  scene.add(model.root);
-  $('door').max = model.doorMax;
-  $('door').disabled = !model.doorMax;
-  $('doorBtn').disabled = !model.doorMax;
-  doorDeg = Math.min(doorDeg, model.doorMax); doorTarget = Math.min(doorTarget, model.doorMax);
-  model.setDoor(doorDeg);
-  applyXray();
-  drawWires();
-  if (refit) fit();
-  panels();
-}
-
-function drawWires() {
-  if (!model) return;
-  model.pickables = model.pickables.filter((o) => o.userData.kind !== 'wire');
-  wireMeshes = wiresOn ? model.setWires(wires, { labels: labelsOn }) : model.setWires([]);
-  model.openDucts(wiresOn && wires.length > 0);
-  model.pickables.push(...wireMeshes);
-  $('wiresBtn').classList.toggle('on', wiresOn);
-}
-
-function wirePanel(data) {
-  $('wcount').textContent = wires.length ? `(${wires.length})` : '';
-  const total = wires.reduce((s, w) => s + (w.route?.length || 0), 0);
-  $('wnote').textContent = data ? `from the drawings' nets · ${(total / 1000).toFixed(1)} m routed · ${data.unresolved} net(s) end outside this panel` : '';
-  $('wires').innerHTML = wires.map((w, i) => `<tr data-w="${i}"><td>${esc(w.no ?? '')}</td><td>${esc(w.from.tag)}${w.from.pin ? ':' + esc(w.from.pin) : ''} → ${esc(w.to.tag)}${w.to.pin ? ':' + esc(w.to.pin) : ''}</td><td>${w.route?.ok ? w.route.length + ' mm' : '—'}</td></tr>`).join('')
-    || '<tr><td class="muted">no wires (cabinet has no drawing connections)</td></tr>';
-}
-$('wires').onclick = (e) => {
-  const tr = e.target.closest('tr[data-w]');
-  if (tr) select(wireMeshes.find((m) => m.userData.wire === wires[Number(tr.dataset.w)]) || null);
+$('#search').onkeydown = (e) => {
+  const box = $('#searchResults'), items = [...box.querySelectorAll('[data-k]')], i = items.findIndex((b) => b.hasAttribute('data-active'));
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[i]?.removeAttribute('data-active'); items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.setAttribute('data-active', ''); }
+  else if (e.key === 'Enter') { e.preventDefault(); (items[i] || items[0])?.click(); }
+  else if (e.key === 'Escape') { box.hidden = true; $('#search').blur(); }
 };
+$('#searchResults').onclick = (e) => { const b = e.target.closest('[data-k]'); if (!b) return; $('#searchResults').hidden = true; $('#search').value = b.dataset.k; showXref(b.dataset.k, { jump: true }); };
+document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#searchResults, #search')) $('#searchResults').hidden = true; });
 
-function applyXray() {
-  if (!model) return;
-  const m = model.bodyMaterial;
-  m.transparent = xray; m.opacity = xray ? 0.18 : 1; m.depthWrite = !xray; m.needsUpdate = true;
-  $('xray').classList.toggle('on', xray);
-}
-
-function panels() {
-  const e = box.enclosure;
-  $('info').innerHTML = rows([
-    ['id', box.id + (box.chain.length ? '  ←  ' + box.chain.join(' ← ') : '')], ['name', box.name],
-    ['size', `${e.width} × ${e.height} × ${e.depth}` + (e.stand_height ? ` + stand ${e.stand_height}` : '')],
-    ['material', `${e.material} / ${e.paint}`], ['door', `${box.door.hinge}, max ${model.doorMax}°`],
-    ['plate', box.plate && `${box.plate.width} × ${box.plate.height} t${box.plate.thickness}`],
-    ['ducts / rails', box.plate && `${box.ducts.length} / ${box.rails.length}`],
-  ]);
-  const comps = cabinet?.components || [];
-  $('count').textContent = comps.length ? `(${comps.length})` : '';
-  $('parts').innerHTML = comps.map((c, i) => `<tr data-i="${i}"><td>${esc(c.tag)}</td><td>${esc(c.part || '')}</td><td>${esc(c.rail || '')}</td></tr>`).join('')
-    || '<tr><td>no cabinet selected</td></tr>';
-  const rev = [...(box.review || []), ...(cabinet?.review || [])];
-  $('review').innerHTML = rev.map((r) => `<div class="rev">⚠ ${esc(r)}</div>`).join('') || '<span class="muted">none</span>';
-  showSel();
-}
-
-function showSel() {
-  if (!selected) { $('sel').innerHTML = '<tr><td>click a part in 3D or in the list</td></tr>'; $('selLinks').innerHTML = ''; return; }
-  const u = selected.userData;
-  if (u.kind === 'wire') {
-    const w = u.wire;
-    $('sel').innerHTML = rows([['wire no.', w.no], ['from', `${w.from.tag}${w.from.pin ? ':' + w.from.pin : ''}  (${w.from.why})`],
-      ['to', `${w.to.tag}${w.to.pin ? ':' + w.to.pin : ''}  (${w.to.why})`], ['length', w.route?.ok ? w.route.length + ' mm incl. slack' : 'not routed'],
-      ['drawing', `${pageName(w.page).join(' · ')}  ${w.line || ''}`], ['net labels', w.keys.join(', ')]]);
-    $('selLinks').innerHTML = `<span class="pill" data-page="${esc(w.page)}" data-line="${esc(w.line || '')}">open in drawing</span>`;
-  } else {
-    $('sel').innerHTML = rows([['tag', u.tag], ['part', u.part], ['kind', u.category || u.kind], ['rail', u.rail],
-      ['module', u.module], ['position', u.x !== undefined ? `x ${u.x}  y ${u.y}  (${u.w} × ${u.h})` : ''], ['3D model', u.model], ['note', u.note]]);
-    const n = wires.filter((w) => w.from.tag === u.tag || w.to.tag === u.tag).length;
-    $('selLinks').innerHTML = u.tag ? `<span class="pill" data-k="${esc(u.tag)}">show ${esc(u.tag)} in drawings</span>${n ? `<span class="muted"> · ${n} wire(s)</span>` : ''}` : '';
+// ======================================================================== commands
+const in2d = () => state.mode === '2d' && !!editor.doc;
+const in3d = () => state.mode === '3d';
+const tools = [['select', 'select', 'Select', 'v'], ['pan', 'pan', 'Pan', 'h'], ['wire', 'wire', 'Wire', 'w'], ['line', 'line', 'Line', 'l'], ['rect', 'rect', 'Rectangle', 'b'], ['ellipse', 'ellipse', 'Ellipse', 'e'], ['text', 'text', 'Text', 't']];
+for (const [id, ic, title, key] of tools) command({ id: 'tool.' + id, title: `${title} tool`, group: 'Tools', icon: ic, keys: key, when: in2d, run: () => editor.setTool(id) });
+command({ id: 'save', title: 'Save sheet', group: 'Sheet', icon: 'save', keys: 'mod+s', when: in2d, run: async () => {
+  try { await editor.save(); toast('Sheet saved'); await refreshDrawings(); renderInspector(); }
+  catch (e) {
+    if (e.status === 409) { const r = await confirmDialog('Sheet changed elsewhere', 'Another window saved this sheet after you opened it. Overwrite it with your version?', 'Overwrite', true); if (r) { editor.doc.rev = undefined; try { await editor.save(); toast('Sheet saved'); } catch (e2) { toast(e2.message, { kind: 'err' }); } } }
+    else toast(e.message, { kind: 'err' });
   }
-  document.querySelectorAll('#wires tr').forEach((tr) => tr.classList.toggle('sel', u.kind === 'wire' && wires[tr.dataset.w] === u.wire));
-  document.querySelectorAll('#parts tr').forEach((tr) => tr.classList.toggle('sel', cabinet?.components[tr.dataset.i]?.tag === u.tag && u.kind === 'component'));
-}
-$('selLinks').onclick = async (e) => {
-  const p = e.target.closest('[data-k]');
-  if (p) { setMode('2d'); return showXref(p.dataset.k.toUpperCase().replace(/\s+/g, '')); }
-  const pg = e.target.closest('[data-page]');
-  if (pg) {
-    setMode('2d');
-    const line = pg.dataset.line && (await api(`/api/xref/${encodeURIComponent(project())}?key=${encodeURIComponent(pg.dataset.line)}`)).line;
-    if (line && line.page === pg.dataset.page) await sheet.gotoLine(line); else await openSheet(pg.dataset.page);
-    markTree(pg.dataset.page);
-  }
-};
-
-const highlight = { obj: null };
-function select(obj) {
-  if (highlight.obj) for (const m of [].concat(highlight.obj.material)) m.emissive?.setHex(0);
-  selected = obj;
-  highlight.obj = obj;
-  if (obj) for (const m of [].concat(obj.material)) m.emissive?.setHex(0x663300);
-  showSel();
-}
-$('parts').onclick = (ev) => {
-  const tr = ev.target.closest('tr[data-i]');
-  if (!tr) return;
-  const tag = cabinet.components[tr.dataset.i].tag;
-  select(model.pickables.find((o) => o.userData.kind === 'component' && o.userData.tag === tag) || null);
-};
-
-const ray = new THREE.Raycaster();
-let down = null;
-renderer.domElement.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; });
-renderer.domElement.addEventListener('pointerup', (e) => {
-  if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;
-  const r = renderer.domElement.getBoundingClientRect();
-  ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
-  const hit = ray.intersectObjects(model.pickables, false)[0];
-  select(hit ? hit.object : null);
-});
-
-const toggleDoor = () => { doorTarget = doorTarget > 0 ? 0 : model.doorMax; };
-$('doorBtn').onclick = toggleDoor;
-$('door').oninput = (e) => { doorTarget = doorDeg = Number(e.target.value); model.setDoor(doorDeg); };
-$('xray').onclick = () => { xray = !xray; applyXray(); };
-$('labels').onclick = () => { labelsOn = !labelsOn; $('labels').classList.toggle('on', labelsOn); rebuild(false); };
-$('fit').onclick = fit;
-$('wiresBtn').onclick = () => { wiresOn = !wiresOn; drawWires(); };
-$('side').onclick = () => { $('aside').hidden = !$('aside').hidden; $('side').textContent = $('aside').hidden ? 'Show panel' : 'Hide panel'; };
-addEventListener('keydown', (e) => {
-  if (e.target.closest('input,select')) return;
-  const k = e.key.toLowerCase();
-  if (e.key === '/') { e.preventDefault(); setMode('2d'); $('q').focus(); return; }
-  if (k === 'h') return $('side').click();
-  if (mode !== '3d') return;
-  if (k === 'o') toggleDoor(); else if (k === 'x') $('xray').click(); else if (k === 'l') $('labels').click();
-  else if (k === 'w') $('wiresBtn').click();
-  else if (e.key === 'Home') fit();
-});
-
-async function loadBox(refit = true) {
-  const id = $('box').value, cab = $('cabinet').value;
-  if (!id) return;
-  store.set('box', id); store.set('cabinet.' + id, cab);
+} });
+command({ id: 'undo', title: 'Undo', group: 'Edit', icon: 'undo', keys: 'mod+z', when: in2d, run: () => editor.undo() });
+command({ id: 'redo', title: 'Redo', group: 'Edit', icon: 'redo', keys: ['mod+y', 'mod+shift+z'], when: in2d, run: () => editor.redo() });
+command({ id: 'delete', title: 'Delete selection', group: 'Edit', icon: 'trash', keys: ['Delete', 'Backspace'], when: in2d, run: () => editor.deleteSel() });
+command({ id: 'duplicate', title: 'Duplicate', group: 'Edit', icon: 'copy', keys: 'mod+d', when: in2d, run: () => editor.duplicate() });
+command({ id: 'copy', title: 'Copy', group: 'Edit', icon: 'copy', keys: 'mod+c', when: in2d, run: () => editor.copy() });
+command({ id: 'cut', title: 'Cut', group: 'Edit', keys: 'mod+x', when: in2d, run: () => editor.cut() });
+command({ id: 'paste', title: 'Paste', group: 'Edit', keys: 'mod+v', when: in2d, run: () => editor.paste() });
+command({ id: 'selectAll', title: 'Select all', group: 'Edit', keys: 'mod+a', when: in2d, run: () => editor.selectAll() });
+command({ id: 'rotate', title: 'Rotate 90°', group: 'Arrange', icon: 'rotate', keys: 'mod+r', when: in2d, run: () => editor.rotateSel() });
+command({ id: 'flip', title: 'Flip horizontal', group: 'Arrange', keys: 'shift+h', when: () => in2d() && editor.selection.length > 0, run: () => editor.flipSel() });
+command({ id: 'zoomSel', title: 'Zoom to selection', group: 'View', icon: 'search', keys: 'shift+2', when: () => in2d() && editor.selection.length > 0, run: () => { editor.zoomToSelection(); renderZoom(); } });
+command({ id: 'saveSymbol', title: 'Save selection as symbol…', group: 'Library', icon: 'lib', when: () => in2d() && editor.selection.length > 0, run: async () => {
+  const geo = editor.selectionAsSymbol();
+  if (!geo) { toast('The selection has no drawable geometry', { kind: 'err' }); return; }
+  const name = await prompt('Save as library symbol', 'New symbol', 'Save'); if (!name) return;
   try {
-    let wdata;
-    [box, cabinet, wdata] = await Promise.all([
-      api(`/api/box/${encodeURIComponent(id)}?project=${encodeURIComponent(project())}`),
-      cab ? api(`/api/cabinet/${encodeURIComponent(project())}/${encodeURIComponent(cab)}`) : null,
-      cab ? api(`/api/wires/${encodeURIComponent(project())}/${encodeURIComponent(cab)}`).catch(() => null) : null,
-    ]);
-    wires = wdata?.wires || [];
-    $('err').textContent = '';
-    rebuild(refit);
-    wirePanel(wdata);
-  } catch (e) { $('err').textContent = e.message; }
+    const sym = await api(`/api/symbols/${encodeURIComponent(project())}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, category: 'custom', ...geo }) });
+    state.symbols.push(sym); editor.setSymbols(state.symbols);
+    if (state.leftTab === 'symbols') renderLibrary();
+    toast(`Saved "${name}" to the library (${geo.pins.length} pin${geo.pins.length === 1 ? '' : 's'})`, { action: { label: 'Show', run: () => { setLeftTab('symbols'); } } });
+  } catch (e) { toast(e.message, { kind: 'err' }); }
+} });
+command({ id: 'front', title: 'Bring to front', group: 'Arrange', icon: 'front', keys: 'mod+]', when: in2d, run: () => editor.reorder(true) });
+command({ id: 'back', title: 'Send to back', group: 'Arrange', icon: 'back', keys: 'mod+[', when: in2d, run: () => editor.reorder(false) });
+for (const k of ['left', 'center', 'right', 'top', 'middle', 'bottom']) command({ id: 'align.' + k, title: `Align ${k}`, group: 'Arrange', icon: 'align' + { left: 'L', center: 'C', right: 'R', top: 'T', middle: 'M', bottom: 'B' }[k], when: () => in2d() && editor.selection.length > 1, run: () => editor.align(k) });
+const G = 2.5 * PT;
+for (const [k, dx, dy] of [['ArrowLeft', -1, 0], ['ArrowRight', 1, 0], ['ArrowUp', 0, -1], ['ArrowDown', 0, 1]]) {
+  command({ id: 'nudge.' + k, keys: k, when: () => in2d() && editor.selection.length > 0, run: () => editor.nudge(dx * G, dy * G) });
+  command({ id: 'nudgeBig.' + k, keys: 'shift+' + k, when: () => in2d() && editor.selection.length > 0, run: () => editor.nudge(dx * G * 10, dy * G * 10) });
+}
+command({ id: 'escape', keys: 'Escape', when: () => state.mode === '2d', run: () => editor.escape() });
+command({ id: 'enter', keys: 'Enter', when: () => in2d() && ['wire', 'line'].includes(editor.tool), run: () => editor.finishDraft() });
+command({ id: 'editText', title: 'Edit text of selection', group: 'Edit', icon: 'text', keys: 'F2', when: () => in2d() && editor.selection.length === 1, run: () => editor.editSelectedText() });
+command({ id: 'ghostRotate', keys: 'r', when: () => in2d() && editor.tool === 'place', run: () => editor.rotateGhost() });
+command({ id: 'snap', title: 'Toggle snap', group: 'View', icon: 'magnet', keys: 's', when: in2d, run: () => { editor.snap = !editor.snap; toast(`Snap ${editor.snap ? 'on' : 'off'}`, { kind: 'info', duration: 1200 }); } });
+command({ id: 'grid', title: 'Toggle grid', group: 'View', icon: 'grid', keys: 'g', when: in2d, run: () => { editor.grid = !editor.grid; } });
+command({ id: 'bg', title: 'Toggle title block', group: 'View', icon: 'layers', when: in2d, run: () => { editor.background = !editor.background; } });
+command({ id: 'zoomIn', title: 'Zoom in', group: 'View', icon: 'zoomIn', keys: ['mod+=', 'mod++'], when: in2d, run: () => { editor.zoomBy(1 / 1.25); renderZoom(); } });
+command({ id: 'zoomOut', title: 'Zoom out', group: 'View', icon: 'zoomOut', keys: 'mod+-', when: in2d, run: () => { editor.zoomBy(1.25); renderZoom(); } });
+command({ id: 'fit', title: 'Fit sheet', group: 'View', icon: 'fit', keys: 'mod+0', when: in2d, run: () => { editor.fit(); renderZoom(); } });
+command({ id: 'zoom100', title: 'Zoom to 100 %', group: 'View', keys: 'mod+1', when: in2d, run: () => { editor.zoomToPct(100); renderZoom(); } });
+command({ id: 'lang', title: 'Switch drawing language (EN / JA)', group: 'View', icon: 'lang', keys: 'alt+l', run: () => {
+  state.english = !state.english; store.set('lang', state.english ? 'en' : 'ja'); editor.setLanguage(state.english); renderLang(); renderLeftBody(); renderIndexStatus(); renderInspector();
+  if (editor.doc) $('#sheetName').textContent = tr(editor.doc.name);
+} });
+$('#langBtn').onclick = () => runCommand('lang');
+command({ id: 'palette', title: 'Command palette', group: 'Help', icon: 'command', keys: 'mod+k', run: openPalette });
+$('#paletteBtn').onclick = openPalette;
+command({ id: 'shortcuts', title: 'Keyboard shortcuts', group: 'Help', icon: 'keyboard', keys: '?', run: shortcutsDialog });
+command({ id: 'find', title: 'Find tag / wire / address', group: 'Navigate', icon: 'search', keys: ['mod+f', '/'], when: () => state.mode === '2d', run: () => $('#search').focus() });
+command({ id: 'mode2d', title: 'Drawings workspace', group: 'Navigate', icon: 'sheet', keys: 'alt+1', run: () => setMode('2d') });
+command({ id: 'mode3d', title: 'Panel 3D workspace', group: 'Navigate', icon: 'box3d', keys: 'alt+2', run: () => setMode('3d') });
+command({ id: 'toggleLeft', title: 'Toggle left panel', group: 'View', icon: 'panel', keys: 'mod+b', run: () => { leftOpen = !leftOpen; $('#main').classList.toggle('no-left', !leftOpen || state.mode === '3d'); } });
+command({ id: 'toggleRight', title: 'Toggle inspector', group: 'View', icon: 'panelR', keys: 'mod+.', run: () => { rightOpen = !rightOpen; $('#main').classList.toggle('no-right', !rightOpen); } });
+command({ id: 'symbols', title: 'Show symbol library', group: 'Navigate', icon: 'lib', keys: 'alt+s', run: () => { setMode('2d'); setLeftTab('symbols'); $('#leftFilter')?.focus(); } });
+command({ id: 'components', title: 'Show component catalogue', group: 'Navigate', icon: 'chip', keys: 'alt+c', run: () => { setMode('2d'); setLeftTab('components'); $('#leftFilter')?.focus(); } });
+command({ id: 'newSheet', title: 'New sheet', group: 'Sheet', icon: 'plus', run: async () => {
+  const name = await prompt('New sheet', 'New sheet', 'Create'); if (!name) return;
+  const dr = state.drawings.find((d) => d.pages.some((p) => p.id === state.sheet));
+  try {
+    const r = await api(`/api/page/${encodeURIComponent(project())}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, drawing: dr?.file || 'custom', like: state.sheet }) });
+    await refreshDrawings(); await openSheet(r.id); toast('Sheet created');
+  } catch (e) { toast(e.message, { kind: 'err' }); }
+} });
+command({ id: 'rename', title: 'Rename sheet', group: 'Sheet', icon: 'text', when: in2d, run: async () => {
+  const name = await prompt('Rename sheet', tr(editor.doc.name), 'Rename'); if (!name || name === editor.doc.name) return;
+  try { await editor.rename(name); $('#sheetName').textContent = tr(name); await refreshDrawings(); toast('Sheet renamed'); } catch (e) { toast(e.message, { kind: 'err' }); }
+} });
+$('#sheetName').ondblclick = () => runCommand('rename');
+command({ id: 'deleteSheet', title: 'Delete sheet', group: 'Sheet', icon: 'trash', when: () => in2d() && editor.doc.saved && !editor.doc.source, run: async () => {
+  if (!(await confirmDialog('Delete this sheet?', `"${tr(editor.doc.name)}" will be moved out of the project (kept as a .deleted file).`, 'Delete', true))) return;
+  try { await api(`/api/doc/${encodeURIComponent(project())}/${encodeURIComponent(state.sheet)}`, { method: 'DELETE' }); state.sheet = null; await refreshDrawings(); const first = state.drawings[0]?.pages[0]?.id; if (first) await openSheet(first, { force: true }); toast('Sheet deleted'); } catch (e) { toast(e.message, { kind: 'err' }); }
+} });
+command({ id: 'export', title: 'Export sheet as SVG', group: 'Sheet', icon: 'download', when: in2d, run: () => {
+  const blob = new Blob([editor.exportSvg()], { type: 'image/svg+xml' });
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `${tr(editor.doc.name).replace(/[\\/:*?"<>|]+/g, '_')}.svg` });
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+} });
+command({ id: 'print', title: 'Print / save as PDF', group: 'Sheet', icon: 'print', keys: 'mod+p', when: in2d, run: () => {
+  const d = editor.doc, w = window.open('', '_blank');
+  if (!w) { toast('Allow pop-ups to print', { kind: 'err' }); return; }
+  w.document.write(`<!doctype html><title>${esc(tr(d.name))}</title><style>@page{size:${d.widthMm}mm ${d.heightMm}mm;margin:0}html,body{margin:0}svg{width:${d.widthMm}mm;height:${d.heightMm}mm;display:block}</style>${editor.exportSvg()}`);
+  w.document.close(); w.onload = () => { w.focus(); w.print(); };
+} });
+command({ id: 'door', title: 'Open / close door', group: '3D', icon: 'door', keys: 'o', when: in3d, run: () => { panel3d.toggleDoor(); setTimeout(renderToolbar, 50); } });
+command({ id: 'xray', title: 'X-ray', group: '3D', icon: 'xray', keys: 'x', when: in3d, run: () => { panel3d.toggleXray(); renderToolbar(); } });
+command({ id: 'labels', title: 'Labels', group: '3D', icon: 'tag', keys: 'l', when: in3d, run: () => { panel3d.toggleLabels(); renderToolbar(); } });
+command({ id: 'wires3d', title: 'Wires', group: '3D', icon: 'cable', keys: 'w', when: in3d, run: () => { panel3d.toggleWires(); renderToolbar(); } });
+command({ id: 'fit3d', title: 'Fit 3D view', group: '3D', icon: 'fit', keys: 'Home', when: in3d, run: () => panel3d.fit() });
+command({ id: 'projects', title: 'Switch project', group: 'Navigate', icon: 'panel', run: () => $('#projectBtn').click() });
+
+stage2d.addEventListener('contextmenu', (e) => {
+  if (!editor.doc || editor.tool !== 'select') return;
+  const id = editor.pickAt(e.clientX, e.clientY);
+  const has = id != null || editor.selection.length > 0;
+  const k = (c) => keyLabel([].concat(c)[0]);
+  menu([
+    { label: 'Cut', keys: k('mod+x'), disabled: !has, run: () => runCommand('cut') },
+    { label: 'Copy', icon: 'copy', keys: k('mod+c'), disabled: !has, run: () => runCommand('copy') },
+    { label: 'Paste', keys: k('mod+v'), run: () => runCommand('paste') },
+    { label: 'Duplicate', keys: k('mod+d'), disabled: !has, run: () => runCommand('duplicate') },
+    '-',
+    { label: 'Rotate 90°', icon: 'rotate', keys: k('mod+r'), disabled: !has, run: () => runCommand('rotate') },
+    { label: 'Flip horizontal', keys: k('shift+h'), disabled: !has, run: () => runCommand('flip') },
+    { label: 'Bring to front', icon: 'front', keys: k('mod+]'), disabled: !has, run: () => runCommand('front') },
+    { label: 'Send to back', icon: 'back', keys: k('mod+['), disabled: !has, run: () => runCommand('back') },
+    '-',
+    { label: 'Save as symbol…', icon: 'lib', disabled: !has, run: () => runCommand('saveSymbol') },
+    { label: 'Zoom to selection', icon: 'search', keys: k('shift+2'), disabled: !has, run: () => runCommand('zoomSel') },
+    '-',
+    { label: 'Delete', icon: 'trash', keys: 'Del', danger: true, disabled: !has, run: () => runCommand('delete') },
+  ], { x: e.clientX, y: e.clientY });
+});
+
+addEventListener('beforeunload', (e) => { if (editor.dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+// ======================================================================== project
+$('#projectBtn').onclick = (e) => menu(state.projects.map((p) => ({ label: p, icon: p === project() ? 'check' : 'panel', run: () => loadProject(p) })), { anchor: e.currentTarget });
+async function loadProject(p) {
+  if (p === project()) return;
+  if (!(await guardUnsaved())) return;
+  state.project = p; store.set('project', p);
+  $('#projectName').textContent = p;
+  const [drawings, symbols, components, dict] = await Promise.all([
+    api('/api/sheets/' + encodeURIComponent(p)), api('/api/symbols/' + encodeURIComponent(p)).catch(() => []),
+    api('/api/components/' + encodeURIComponent(p)).catch(() => []), api('/api/i18n/' + encodeURIComponent(p)).catch(() => ({})),
+  ]);
+  Object.assign(state, { drawings, symbols, components, dict: buildDict(dict), xref: null, net: null, sheet: null });
+  // part-number suggestions for symbols (shape data), from the component catalogue
+  let dl = $('#partList'); if (!dl) { dl = document.createElement('datalist'); dl.id = 'partList'; document.body.append(dl); }
+  dl.innerHTML = components.map((c) => `<option value="${esc(c.part)}">${esc([c.maker, c.category].filter(Boolean).join(' · '))}</option>`).join('');
+  editor.setDict(state.dict); editor.setLanguage(state.english); editor.setSymbols(symbols);
+  panel3d.reset();
+  renderLeft();
+  const want = qs.get('sheet') || store.get('sheet.' + p, drawings[0]?.pages[0]?.id);
+  const exists = drawings.some((d) => d.pages.some((x) => x.id === want));
+  const first = exists ? want : drawings[0]?.pages[0]?.id;
+  if (first) await openSheet(first, { force: true }); else { stage2d.innerHTML = '<div class="empty-state"><div><div style="font-size:15px;color:var(--text-2);margin-bottom:6px">No sheets in this project yet</div><div class="mono">python -m ecad.cli import-visio &lt;folder&gt; projects/' + esc(p) + '</div></div></div>'; renderInspector(); }
 }
 
-function syncCabinet() {
-  const opts = [...$('cabinet').options].map((o) => o.value);
-  const b = $('box').value, remembered = store.get('cabinet.' + b, null);
-  $('cabinet').value = remembered !== null && opts.includes(remembered) ? remembered : opts.includes(b) ? b : '';
-}
-
-async function show3D(cab, tag) {
-  if ($('box').value !== cab && [...$('box').options].some((o) => o.value === cab)) { $('box').value = cab; }
-  $('cabinet').value = cab;
-  setMode('3d');
-  await loadBox(true);
-  select(model.pickables.find((o) => o.userData.kind === 'component' && o.userData.tag === tag) || null);
-  doorTarget = model.doorMax;             // open the door so the part is visible
-}
-
-async function loadProject() {
-  store.set('project', project());
-  const [boxes, cabs] = await Promise.all([api('/api/boxes?project=' + encodeURIComponent(project())), api('/api/cabinets/' + encodeURIComponent(project()))]);
-  const want = store.get('box', '1CE');
-  $('box').innerHTML = boxes.filter((b) => !b.abstract && !b.error)
-    .map((b) => `<option value="${esc(b.id)}" ${b.id === want ? 'selected' : ''}>${esc(b.id)}${b.local ? ' (project)' : ''} — ${esc(b.name)}</option>`).join('');
-  $('cabinet').innerHTML = '<option value="">(none)</option>' + cabs.map((c) => `<option>${esc(c)}</option>`).join('');
-  syncCabinet();
-  model = null;
-  await loadTree();
-  if (mode === '3d') await loadBox(true);
-}
-
-$('project').onchange = loadProject;
-$('box').onchange = () => { syncCabinet(); loadBox(true); };
-$('cabinet').onchange = () => loadBox(false);
-
-// URL: ?project=&mode=2d|3d&sheet=<id>&key=CRPB1&box=&cabinet=&door=90&xray=1&panel=0
-const qs = new URLSearchParams(location.search);
-for (const k of ['project', 'box']) if (qs.has(k)) store.set(k, qs.get(k));
-if (qs.has('cabinet')) store.set('cabinet.' + (qs.get('box') || store.get('box', '')), qs.get('cabinet'));
-
+// ======================================================================== boot
 (async () => {
-  const projects = await api('/api/projects');
-  partsCat = await api('/api/parts').catch(() => ({}));
-  if (!projects.length) {
-    $('tree').innerHTML = '<div class="dr">No project yet.</div><div style="padding:4px 10px" class="muted">Import Visio drawings:<br>'
-      + '<code>python -m ecad.cli import-visio &lt;folder&gt; projects/&lt;name&gt;</code><br>then reload. The 3D tab shows the library boxes.</div>';
+  state.projects = await api('/api/projects');
+  setLeftTab(state.leftTab);
+  slideIndicator($('#modeSeg'));
+  renderToolbar(); renderStatusTool();
+  if (!state.projects.length) {
+    $('#projectName').textContent = 'No project';
+    stage2d.innerHTML = '<div class="empty-state"><div><div style="font-size:15px;color:var(--text-2);margin-bottom:6px">No project yet</div><div class="mono">python -m ecad.cli import-visio &lt;folder-with-vsd&gt; projects/&lt;name&gt;</div></div></div>';
     document.body.dataset.ready = '1';
     return;
   }
-  const want = store.get('project', projects[0]);
-  $('project').innerHTML = projects.map((p) => `<option ${p === want ? 'selected' : ''}>${esc(p)}</option>`).join('');
-  await loadProject();
-  setMode(qs.get('mode') || store.get('mode', '2d'));
-  if (mode === '2d') {
-    const first = drawings[0]?.pages[0]?.id;
-    const sid = qs.get('sheet') || store.get('sheet', first);
-    if (sid) await openSheet(drawings.some((d) => d.pages.some((p) => p.id === sid)) ? sid : first);
-    if (qs.has('key')) await showXref(qs.get('key').toUpperCase());
-  } else {
-    if (!model) await loadBox(true);
-    if (qs.has('door')) { doorTarget = doorDeg = Math.min(Number(qs.get('door')), model.doorMax); model.setDoor(doorDeg); }
-    if (qs.get('xray') === '1') { xray = true; applyXray(); }
-  }
-  if (qs.get('panel') === '0') $('side').click();
+  const want = qs.get('project') || store.get('project', state.projects[0]);
+  await loadProject(state.projects.includes(want) ? want : state.projects[0]);
+  if (qs.get('mode') === '3d') await setMode('3d');
+  if (qs.has('key')) await showXref(qs.get('key').toUpperCase(), { jump: true });
   document.body.dataset.ready = '1';
-})().catch((e) => { $('err').textContent = e.message; });
+})().catch((e) => { toast(e.message, { kind: 'err', duration: 8000 }); console.error(e); });
 
-let last = performance.now();
-renderer.setAnimationLoop((now) => {
-  const dt = Math.min(0.05, (now - last) / 1000); last = now;
-  if (mode !== '3d') return;
-  if (model && doorDeg !== doorTarget) {
-    const step = 120 * dt;
-    doorDeg = Math.abs(doorTarget - doorDeg) <= step ? doorTarget : doorDeg + Math.sign(doorTarget - doorDeg) * step;
-    model.setDoor(doorDeg);
-  }
-  if (model) {
-    if (Number($('door').value) !== doorDeg) $('door').value = doorDeg;
-    $('doorVal').textContent = Math.round(doorDeg) + '°';
-    $('doorBtn').textContent = doorTarget > 0 ? 'Close door' : 'Open door';
-  }
-  controls.update();
-  renderer.render(scene, camera);
-});
+setInterval(() => { if (state.mode === '2d') renderIndexStatus(); }, 1500);
 
-window.ecadDebug = { get model() { return model; }, camera, sheet, showXref, setMode };
+// read-only hooks for the browser tests
+window.ecadDebug = { editor, panel3d, openSheet, showXref, setMode, get state() { return state; } };

@@ -4,16 +4,58 @@ Reference: SKYCAD Electrical feature page (Standard free / Advanced / Pro) and i
 read 2026-09-29 (skycad.ca/features-pricing, skycad.ca/forums/all-tutorials).
 Status: `[x]` done · `[~]` partial / data only, no UI · `[ ]` not started.
 
+## 0. Visio parity (the drawing editor) — updated 2026-09-30
+Imported sheets open as editable documents that look exactly like the Visio export (same markup),
+and index exactly like the import (tested on all 27 pages).
+
+| Visio feature | Status | Where |
+|---|---|---|
+| Multi-page drawings, page tree, open/switch pages | [x] | Sheets tab; unsaved-change guard on switch |
+| Background page (frame + title block) | [x] shown, locked; toggle | toolbar "Title block" |
+| Zoom (wheel, +/-, fit, presets, 100 % = true size), pan (Space / middle / H) | [x] | toolbar, `Ctrl+0`, `Ctrl+1` |
+| Select, Shift-toggle, marquee, select all | [x] | V, `Ctrl+A` |
+| Move with grid snap (2.5 mm), nudge (arrows, Shift ×10) | [x] | |
+| Undo / redo (300 steps, labelled) | [x] | `Ctrl+Z` / `Ctrl+Y` |
+| Cut / copy / paste (also across sheets), duplicate, delete | [x] | `Ctrl+X/C/V/D`, Del |
+| Draw lines, rectangles, ellipses, text | [x] | L, B, E, T |
+| Connectors: orthogonal wires with auto elbow, snap to pins / wire ends / onto a wire (T + dot) | [x] | W |
+| **Glue**: wire ends follow a moved shape's pins | [x] | |
+| Stencils: drag & drop library symbols, place mode with rotate (R) and auto tag | [x] | Symbols tab (122 from this project) |
+| Custom stencils: save any selection as a symbol | [x] | right-click → Save as symbol |
+| Rotate 90°, flip horizontal | [x] symbols & drawn shapes · imported shapes keep orientation | `Ctrl+R`, `Shift+H` |
+| Bring to front / send to back | [x] | `Ctrl+]` / `Ctrl+[` |
+| Align left/centre/right/top/middle/bottom | [x] | multi-selection |
+| Edit text in place (double-click, F2), incl. imported text | [x] | |
+| Shape data: tag, part number (catalogue suggestions), size, position in mm | [x] | Inspector |
+| Right-click context menu | [x] | |
+| Find | [x] tags / wires / addresses across the project | `Ctrl+F`, `/` |
+| Hyperlinks between pages | [x] L-number references follow on double-click | |
+| New page (same frame), rename page, delete page | [x] | Sheets tab `+`, Inspector |
+| Print / PDF at true page size, export SVG | [x] | `Ctrl+P` |
+| Language: Japanese drawings shown in English (164/164 strings), switch back to JA | [x] | `Alt+L` |
+| Resize handles, vertex editing of wires/lines | [ ] | |
+| Group / ungroup | [ ] | |
+| Layers panel (show/lock per layer) | [ ] background only | |
+| Line style editor (dash, arrowheads, colour), fill colour, font | [~] weight only | |
+| Format painter | [ ] | |
+| Rulers and guides | [ ] (grid only) | |
+| Connector re-routing around shapes | [ ] | |
+| Page reorder, page size/orientation setup, duplicate page | [ ] | |
+| Insert image, tables | [ ] | |
+| Round-trip to .vsdx (export back to Visio) | [ ] (import only) | |
+| Comments / review, version history UI | [ ] (saves carry rev + conflict check) | |
+| Find & replace text, spell check | [ ] | |
+
 ## 1. Schematic fundamentals (SKYCAD Standard)
-- [ ] Sheets with title block, grid columns/rows (change title block per sheet)
-- [ ] Symbol library IEC 60617 (+ Denso style from existing drawings: A接点, B接点, G7SA, BREAKER, SOL, SS, TB)
-- [ ] Symbol editor: connection points, port types, port graphics, pin-out attributes
-- [ ] Place / move / rotate symbols, draw wires, snap to connection points
+- [x] Sheets with title block (imported frame; new sheets copy the frame)
+- [x] Symbol library from the example project: 122 symbols, 14 categories, English names, pins from how wires meet them (`tools/extract-symbols.js`)
+- [~] Symbol editor: save a selection as a symbol (pins detected); no dedicated pin editor yet
+- [x] Place / move / rotate symbols, draw wires, snap to connection points
 - [ ] Multi-symbol devices (coil + contacts of one relay on different sheets)
-- [ ] Off-page / on-page references (Visio masters `Off-page reference`, `On-page reference` exist)
+- [~] Off-page / on-page references: masters are in the library; L-number references navigate
 - [x] Navigation: jump to cross-referenced position, highlight connected elements (live Visio SVG)
-- [ ] Print / export PDF (A3/A2), intelligent PDF with clickable cross-references
-- [ ] Import DWG/DXF · [~] **Import Visio .vsd** (raw geometry + text done, topology not yet)
+- [~] Print / export PDF (true size via browser print); no clickable cross-references inside the PDF yet
+- [ ] Import DWG/DXF · [x] **Import Visio .vsd** (geometry, text, topology, editable)
 
 ## 2. Automated numbering & cross-reference (SKYCAD Standard)
 - [ ] Wire numbering: per potential, sheet-column (`104-3`), sequential; Denso styles (`L3018`, `P24A/Z24A`, `DM90`)
@@ -37,7 +79,7 @@ Status: `[x]` done · `[~]` partial / data only, no UI · `[ ]` not started.
 - [ ] Automatic terminal strip layout drawing
 
 ## 5. Parts, catalogue, BOM (SKYCAD Standard)
-- [ ] Parts catalogue (maker, P/N, description, price, dimensions, 3D, terminal count)
+- [~] Parts catalogue: 58 part numbers merged from modules, cabinets and the drawings, with maker, category, footprint, tags, symbols (Components tab); no prices yet
 - [~] Parts known per module (Fuji AH165-*, IDEC XW1E, Omron NX/S8VK, SMC JXC, Misumi cable)
 - [ ] BOM / parts list real-time, grouped by P/N and by location (1CE, 2PB), Excel export
 - [ ] Accessories from box templates into BOM (handle, fan, plates) — data exists

@@ -91,7 +91,7 @@ function labelTexture(lines, pxW, pxH, bg = '#51606f', fg = '#ffffff') {
   return tex;
 }
 
-function sprite(text, heightMm, color = '#b3261e') {
+function sprite(text, heightMm, color = '#b3261e', { depthTest = false } = {}) {
   const c = document.createElement('canvas');
   const fs = 64;
   const g = c.getContext('2d');
@@ -101,9 +101,9 @@ function sprite(text, heightMm, color = '#b3261e') {
   g.fillStyle = 'rgba(255,255,255,.85)'; g.fillRect(0, 0, c.width, c.height);
   g.fillStyle = color; g.textBaseline = 'middle'; g.fillText(text, 12, c.height / 2);
   const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest }));
   s.scale.set(heightMm * c.width / c.height, heightMm, 1);
-  s.renderOrder = 10;
+  s.renderOrder = depthTest ? 0 : 10;
   return s;
 }
 
@@ -357,7 +357,7 @@ export function buildBox(box, cabinet = null, { labels = true, parts = {} } = {}
       wireGroup.add(tube);
       made.push(tube);
       if (showLabels && no) for (const end of [pts[0], pts.at(-1)]) {
-        const s = sprite(no, 5, '#1a4d8f');
+        const s = sprite(no, 5, '#1a4d8f', { depthTest: true });     // inside the box: hidden by a closed door
         s.position.copy(end).add(new THREE.Vector3(0, -4, 0));
         wireGroup.add(s);
       }

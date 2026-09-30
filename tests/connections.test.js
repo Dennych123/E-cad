@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { buildSheetIndex } from '../server/sheets.js';
 import { cabinetWires } from '../server/connections.js';
 import { createStore } from '../server/store.js';
+import { createDocStore } from '../server/docs.js';
 import { routeWires, buildDuctGraph } from '../lib/route.js';
 import { buildNets } from '../lib/nets.js';
 
@@ -16,7 +17,7 @@ const data = (t) => {
   if (!cache) {
     const store = createStore(root);
     const cab = store.cabinet('6451-M014', '1CE');
-    cache = { ix: buildSheetIndex(RAW), cab, box: store.box('1CE', '6451-M014') };
+    cache = { ix: buildSheetIndex(createDocStore(root), '6451-M014'), cab, box: store.box('1CE', '6451-M014') };
     cache.r = cabinetWires(cache.ix, cab);
   }
   return cache;
