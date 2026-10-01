@@ -4,7 +4,7 @@ import { createPanel3D } from '/web/panel3d.js';
 import { createFindBar } from '/web/findreplace.js';
 import { printTerminalPlan, printLabels } from '/web/reports.js';
 import { icon } from '/web/icons.js';
-import { $, esc, toast, menu, dialog, confirmDialog, prompt, command, runCommand, openPalette, shortcutsDialog, keyLabel, slideIndicator } from '/web/ui.js';
+import { $, esc, toast, menu, dialog, confirmDialog, prompt, formDialog, command, runCommand, openPalette, shortcutsDialog, keyLabel, slideIndicator } from '/web/ui.js';
 import { buildDict, translate, hasJapanese } from '/lib/i18n.js';
 import { PT, elementBox, STYLE_KEYS } from '/lib/sheetdoc.js';
 
@@ -601,6 +601,26 @@ command({ id: 'palette', title: 'Command palette', group: 'Help', icon: 'command
 $('#paletteBtn').onclick = openPalette;
 command({ id: 'shortcuts', title: 'Keyboard shortcuts', group: 'Help', icon: 'keyboard', keys: '?', run: shortcutsDialog });
 command({ id: 'find', title: 'Find tag / wire / address in the project', group: 'Navigate', icon: 'search', keys: ['mod+f', '/'], when: () => state.mode === '2d', run: () => $('#search').focus() });
+command({ id: 'numberWires', title: 'Number wires on this sheet…', group: 'Sheet', icon: 'tag', when: in2d, run: async () => {
+  let last = {}; try { last = JSON.parse(store.get('wireno', '{}')); } catch { /* fresh */ }
+  const schemes = [['seq', 'Sequential (W001, W002 …)'], ...(editor.hasRows ? [['line', 'By line number (L1005A, L1005B …)']] : [])];
+  const v = await formDialog({
+    title: 'Number wires', ok: 'Number',
+    body: 'Gives a number to every net of wires drawn here that has none. Numbers you typed yourself stay; imported wiring keeps its own.',
+    fields: [
+      { id: 'scheme', label: 'Scheme', type: 'select', options: schemes, value: schemes.some(([k]) => k === last.scheme) ? last.scheme : 'seq' },
+      { id: 'prefix', label: 'Prefix', type: 'text', value: last.prefix ?? 'W' },
+      { id: 'start', label: 'Start at', type: 'number', min: 0, value: last.start ?? 1 },
+      { id: 'digits', label: 'Digits', type: 'number', min: 1, max: 6, value: last.digits ?? 3 },
+      { id: 'renumber', label: 'Redo automatic numbers', type: 'checkbox', value: false },
+    ],
+    preview: (o) => { const r = editor.numberWires(o, { dryRun: true }); return r.count ? `${r.count} wire${r.count === 1 ? '' : 's'}: ${r.names.slice(0, 4).join(', ')}${r.count > 4 ? ` … ${r.names.at(-1)}` : ''}` : 'Every wire drawn here already has a number.'; },
+  });
+  if (!v) return;
+  store.set('wireno', JSON.stringify({ scheme: v.scheme, prefix: v.prefix, start: v.start, digits: v.digits }));
+  const r = editor.numberWires(v);
+  toast(r.count ? `Numbered ${r.count} wire${r.count === 1 ? '' : 's'}` : 'Nothing to number', { kind: r.count ? 'ok' : 'info', duration: 1800 });
+} });
 command({ id: 'findText', title: 'Find text on this sheet', group: 'Edit', icon: 'search', when: in2d, run: () => findBar.open({ text: editor.selection.length === 1 ? (editor.selection[0].text || editor.selection[0].tag || null) : null }) });
 command({ id: 'findReplace', title: 'Find and replace on this sheet', group: 'Edit', icon: 'replace', keys: 'mod+h', when: in2d, run: () => findBar.open({ replace: true, text: editor.selection.length === 1 ? (editor.selection[0].text || editor.selection[0].tag || null) : null }) });
 command({ id: 'mode2d', title: 'Drawings workspace', group: 'Navigate', icon: 'sheet', keys: 'alt+1', run: () => setMode('2d') });

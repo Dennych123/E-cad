@@ -673,6 +673,70 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
     return { ...el, svg: svgNew, shapes: el.shapes.map((s) => (s.id === shapeId ? { ...s, text } : s)) };
   }
 
+  // ------------------------------------------------------------------ wire numbering (this sheet)
+  // Numbers the nets of wires drawn in the editor that carry no number yet. A number is a text element
+  // marked `auto: 'wireno'`, written over the net's run with the most room; a net is already numbered when
+  // a free text (or imported text) belongs to it - a symbol's tag beside the wire does not count. Imported
+  // Visio wiring is left alone: it carries the drawing's own numbers. `renumber` redoes the automatic ones.
+  const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  function numberWires({ scheme = 'seq', prefix = 'W', start = 1, digits = 3, renumber = false } = {}, { dryRun = false } = {}) {
+    if (!doc || !pageIx) return { count: 0, names: [] };
+    const base = renumber ? els.filter((e) => e.auto !== 'wireno') : els;
+    const ix = base === els ? pageIx : indexPage(docToRawPage({ ...doc, elements: base }));
+    const kindOf = (shapeId) => { const id = shapeOwner.get(shapeId); return id == null ? null : base.find((e) => e.id === id)?.kind; };
+    const n = buildNets(ix.segs), byNet = new Map();
+    ix.segs.forEach((s, i) => { if (!byNet.has(n[i])) byNet.set(n[i], []); byNet.get(n[i]).push(i); });
+    const SIZE = 6;
+    const targets = [];
+    for (const [net, idx] of byNet) {
+      const own = idx.filter((i) => kindOf(ix.segs[i][4]) === 'wire');
+      if (!own.length) continue;
+      if (labelsOfNet(ix.texts, ix.segs, n, net).some((t) => ['text', 'visio'].includes(kindOf(t.id)))) continue;
+      // candidate spots: the middle of each run long enough for a number; keep the one farthest from other nets
+      let best = null;
+      for (const i of own) {
+        const [x1, y1, x2, y2] = ix.segs[i], L = Math.hypot(x2 - x1, y2 - y1);
+        if (L < SIZE * 3) continue;
+        const horiz = Math.abs(y1 - y2) < 0.01;
+        const at = horiz ? { x: (x1 + x2) / 2, y: y1 - 1, anchor: 'middle' } : { x: x1 + 2, y: (y1 + y2) / 2 + SIZE / 3, anchor: 'start' };
+        const cx = horiz ? at.x : at.x + SIZE, cy = at.y - SIZE / 2;
+        let room = Infinity;
+        ix.segs.forEach((s, k) => { if (n[k] !== net) room = Math.min(room, distSeg(cx, cy, s)); });
+        const score = Math.min(room, 20) * 10 + (horiz ? 50 : 0) + Math.min(L, 200) / 10;
+        if (!best || score > best.score) best = { ...at, score, top: Math.min(y1, y2), left: Math.min(x1, x2) };
+      }
+      if (best) targets.push(best);
+    }
+    // reading order: top to bottom, then left to right (rows within 6 pt)
+    targets.sort((a, b) => (Math.abs(a.top - b.top) > 6 ? a.top - b.top : a.left - b.left));
+    const rowOf = (p) => {
+      const cols = [...new Set(ix.rows.map((r) => r.x))].filter((x) => x <= p.x + 5).sort((a, b) => b - a);
+      if (!cols.length) return null;
+      let r = null, bd = Infinity;
+      for (const q of ix.rows) if (q.x === cols[0] && Math.abs(q.y - p.top) < bd) { bd = Math.abs(q.y - p.top); r = q; }
+      return r?.label || null;
+    };
+    const perRow = new Map();
+    const used = new Set(ix.texts.flatMap((t) => t.keys));
+    let k = start;
+    const names = targets.map((p) => {
+      let name;
+      if (scheme === 'line' && rowOf(p)) {
+        const row = rowOf(p), i = perRow.get(row) || 0;
+        perRow.set(row, i + 1);
+        name = row + LETTERS[i % LETTERS.length];
+      } else {
+        do name = prefix + String(k++).padStart(digits, '0'); while (used.has(name.toUpperCase()));
+      }
+      return name;
+    });
+    if (dryRun || !targets.length) return { count: targets.length, names };
+    let id = nextId({ elements: els });
+    const added = targets.map((p, i) => ({ id: id++, kind: 'text', x: f2(p.x), y: f2(p.y), text: names[i], size: SIZE, anchor: p.anchor, auto: 'wireno' }));
+    commit([...base, ...added], `Number ${added.length} wire${added.length === 1 ? '' : 's'}`);
+    return { count: added.length, names };
+  }
+
   // ------------------------------------------------------------------ find & replace (this sheet)
   // Searches what the sheet says: free text, symbol tags, imported shapes' text. With English display on,
   // a match in the translation is found too, but only text written in the document can be replaced.
@@ -1020,7 +1084,8 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
     deleteSel, rotateSel, flipSel, zoomToSelection, selectionAsSymbol, reorder, align, nudge, copy, cut, paste, duplicate, selectAll, select, update, editSelectedText,
     startPlace, dropSymbol, setSymbols, setLanguage, focusShape, gotoRow, finishDraft, group, ungroup, selectionGroup,
     restyle, copyStyle, pasteStyle, reshape, get hasStyleClip() { return !!styleClip; },
-    findText, showMatches, replaceText, clearMarks() { if (marks.length) { marks = []; drawOverlay(); } },
+    findText, showMatches, replaceText, clearMarks() { if (marks.length) { marks = []; drawOverlay(); } }, numberWires,
+    get hasRows() { return !!pageIx?.rows.length; },
     async rename(name) { if (!doc) return; doc.name = name; saved = null; emitChange(); return save(); },
     setDict(d) { dict = d; },
     /** findings of the electrical check on this sheet: [{ shape, key, severity }] */

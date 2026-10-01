@@ -212,6 +212,30 @@ export default function (t) {
     } finally { tp.dispose(); }
   });
 
+  t('editor: number the wires drawn on a sheet; the numbers become the nets\' labels; numbered nets are kept', async () => {
+    ready();
+    const tp = tempProject();
+    try {
+      await withApp(tp.name, async (b) => {
+        const G = 2.5 * 72 / 25.4, at = (x, y) => scr(b, x, y);
+        await key(b, 'w');
+        for (const y of [1000, 1060]) { await b.click(...(await at(1020, y))); await b.click(...(await at(1020 + 14 * G, y))); await key(b, 'Enter'); }
+        await key(b, 'v'); await sleep(250);
+        const r1 = await b.eval(`${E}.numberWires({ scheme: 'seq', prefix: 'W', start: 1, digits: 3 })`);
+        t.eq(r1, { count: 2, names: ['W001', 'W002'] }, 'reading order: upper wire first');
+        await sleep(300);
+        const nets = await b.eval(`(() => { const ix = ${E}.index; return ['W001', 'W002'].map((k) => ix.texts.some((t) => t.keys.includes(k))); })()`);
+        t.eq(nets, [true, true], 'numbers are indexed');
+        await b.eval(`${E}.select([${E}.doc.elements.find((e) => e.kind === 'wire').id])`);
+        await b.waitFor(`window.ecadDebug.state.net?.labels.includes('W001')`, 3000);
+        t.eq(await b.eval(`${E}.numberWires({ scheme: 'seq', prefix: 'W', start: 1, digits: 3 }, { dryRun: true }).count`), 0, 'numbered nets are kept');
+        t.eq((await b.eval(`${E}.numberWires({ scheme: 'seq', prefix: 'X', start: 5, digits: 2, renumber: true })`)).names, ['X05', 'X06'], 'renumber redoes the automatic ones');
+        t.eq(await b.eval(`${E}.doc.elements.filter((e) => e.auto === 'wireno').map((e) => e.text)`), ['X05', 'X06']);
+        t.eq(b.errors(), []);
+      });
+    } finally { tp.dispose(); }
+  });
+
   t('editor: place a symbol, glue a wire to it, move it, undo, save, reload - and the index knows the new tag', async () => {
     ready();
     const tp = tempProject();

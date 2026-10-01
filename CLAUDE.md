@@ -34,6 +34,8 @@ Architecture decisions: `docs/ARCHITECTURE.md`. Feature checklist vs SKYCAD Elec
   dragWireVertex/End/Segment keep wires orthogonal and never move a wire end off its pin - unit-tested).
 - Groups are a shared `group` number on flat elements (no nesting); paste gives copies new group numbers.
 - Style keys per kind live in `STYLE_KEYS`; defaults are not stored (`dash: solid`, `font: mono`...).
+- Wire numbers made by `numberWires` are text elements with `auto: 'wireno'`; a net counts as numbered when
+  a free or imported text belongs to it (a symbol tag beside the wire does not). Only nets with editor wires.
 - The 3D panel shares the inspector element: its listeners must check `active`.
 
 ## UI rules (Emil Kowalski's design-engineering skill, github.com/emilkowalski/skills)

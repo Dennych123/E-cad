@@ -60,7 +60,8 @@ and index exactly like the import (tested on all 27 pages).
 - [ ] Import DWG/DXF · [x] **Import Visio .vsd** (geometry, text, topology, editable)
 
 ## 2. Automated numbering & cross-reference (SKYCAD Standard)
-- [ ] Wire numbering: per potential, sheet-column (`104-3`), sequential; Denso styles (`L3018`, `P24A/Z24A`, `DM90`)
+- [x] Wire numbering per potential (one number per net) for wires drawn in the editor: sequential with prefix (`W001`) or by line number (`L1005A`); keeps typed numbers and imported wiring; redo the automatic ones (`Number wires…`)
+- [ ] Sheet-column scheme (`104-3`), Denso signal names (`DM90`) from a rule table
 - [ ] Component numbering (tags), renumber with orientation rule, keep manual tags
 - [x] Tag auto-numbering when placing modules (`CR{n}` → next free) — `module place`
 - [ ] Sheet / project numbering

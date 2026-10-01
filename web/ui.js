@@ -135,6 +135,47 @@ export function dialog({ title, body = '', input = null, actions }) {
     if (inp) inp.select();
   });
 }
+/**
+ * A small form. fields: [{ id, label, type: 'text'|'number'|'select'|'checkbox', value, options: [[value, label]], min, max }]
+ * Resolves to { id: value } or null. `preview(values)` returns a line shown under the form as values change.
+ */
+export function formDialog({ title, body = '', fields, ok = 'OK', preview = null }) {
+  return new Promise((resolve) => {
+    const scrim = document.createElement('div');
+    scrim.className = 'scrim center';
+    const field = (f) => {
+      const id = `fd-${f.id}`;
+      const input = f.type === 'select'
+        ? `<select id="${id}" name="${esc(f.id)}">${f.options.map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(f.value) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`
+        : f.type === 'checkbox' ? `<input type="checkbox" id="${id}" name="${esc(f.id)}" ${f.value ? 'checked' : ''}>`
+          : `<input type="${f.type === 'number' ? 'number' : 'text'}" id="${id}" name="${esc(f.id)}" value="${esc(f.value ?? '')}" ${f.min != null ? `min="${f.min}"` : ''} ${f.max != null ? `max="${f.max}"` : ''} ${f.type === 'number' ? 'class="mono"' : ''} spellcheck="false" autocomplete="off">`;
+      return `<label for="${id}">${esc(f.label)}</label><span>${input}</span>`;
+    };
+    scrim.innerHTML = `<div class="dialog form" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3>${esc(title)}</h3>${body ? `<p>${esc(body)}</p>` : ''}
+      <form class="fields" onsubmit="return false">${fields.map(field).join('')}</form><p class="preview" aria-live="polite" hidden></p>
+      <div class="actions"><button type="button" class="btn solid" data-a="cancel">Cancel</button><button type="button" class="btn primary" data-a="ok">${esc(ok)}</button></div></div>`;
+    const values = () => Object.fromEntries(fields.map((f) => {
+      const el = scrim.querySelector(`[name="${f.id}"]`);
+      return [f.id, f.type === 'checkbox' ? el.checked : f.type === 'number' ? Number(el.value) : el.value];
+    }));
+    const pv = scrim.querySelector('.preview');
+    const update = () => { if (!preview) return; const t = preview(values()); pv.hidden = !t; pv.textContent = t || ''; };
+    const done = (v) => { document.removeEventListener('keydown', key, true); scrim.remove(); resolve(v); };
+    const key = (e) => {
+      if (e.key === 'Escape') { e.stopPropagation(); done(null); }
+      if (e.key === 'Enter' && e.target.tagName !== 'SELECT') { e.preventDefault(); e.stopPropagation(); done(values()); }
+    };
+    scrim.querySelector('[data-a=cancel]').onclick = () => done(null);
+    scrim.querySelector('[data-a=ok]').onclick = () => done(values());
+    scrim.querySelector('form').addEventListener('input', update);
+    scrim.querySelector('form').addEventListener('change', update);
+    document.addEventListener('keydown', key, true);
+    scrim.onpointerdown = (e) => { if (e.target === scrim) done(null); };
+    document.body.append(scrim);
+    update();
+    scrim.querySelector('input, select')?.focus();
+  });
+}
 export const confirmDialog = (title, body, ok = 'Continue', danger = false) =>
   dialog({ title, body, actions: [{ label: 'Cancel', value: false, cancel: true }, { label: ok, value: true, primary: !danger, danger }] });
 export const prompt = (title, value = '', ok = 'OK') =>
