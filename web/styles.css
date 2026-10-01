@@ -133,7 +133,9 @@ main.no-left.no-right { grid-template-columns: 0 1fr 0; }
 .pane.left { border-right: 1px solid var(--border); }
 .pane.right { border-left: 1px solid var(--border); }
 .tabs { display: flex; gap: 2px; padding: 8px 8px 0; border-bottom: 1px solid var(--border); position: relative; flex: none; }
-.tabs button { height: 30px; padding: 0 10px; border: 0; background: none; color: var(--text-2); cursor: pointer; font-weight: 500; transition: color 150ms ease; }
+.tabs button { position: relative; height: 30px; padding: 0 8px; border: 0; background: none; color: var(--text-2); cursor: pointer; font-weight: 500; transition: color 150ms ease; }
+.tab-dot { position: absolute; top: 6px; right: 1px; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+.tab-dot.error { background: var(--danger); }
 .tabs button[aria-selected=true] { color: var(--text); }
 .tabs .ind { position: absolute; bottom: -1px; left: 0; height: 2px; background: var(--accent); border-radius: 2px; transition: transform 200ms var(--ease-in-out), width 200ms var(--ease-in-out); }
 .pane-body { overflow-y: auto; overflow-x: hidden; flex: 1; min-height: 0; }
@@ -193,6 +195,39 @@ main.no-left.no-right { grid-template-columns: 0 1fr 0; }
 .occ[aria-current=true] { background: var(--accent-soft); }
 .key-title { font: 600 20px var(--mono); letter-spacing: -.01em; }
 
+/* electrical check */
+.chk-sum { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 12px 10px 4px; }
+.chk-sum .n { padding: 8px 10px; border-radius: var(--r); background: var(--surface-2); border: 1px solid var(--border); }
+.chk-sum b { display: block; font: 600 20px/1.1 var(--mono); color: var(--text); }
+.chk-sum span { font-size: 11px; color: var(--text-3); }
+.chk-sum .err.hot b { color: var(--danger); } .chk-sum .warn.hot b { color: var(--warn); }
+.chk-at { padding: 4px 12px 8px; font-size: 11px; }
+.chk-rule { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 6px 12px; border: 0; border-top: 1px solid var(--border); background: none; color: var(--text); cursor: pointer; text-align: left; }
+.chk-rule .t { flex: 1; min-width: 0; font-weight: 500; }
+.chk-rule .c { font: 500 11px var(--mono); color: var(--text-3); }
+.chk-rule .chev { color: var(--text-3); transition: transform 160ms var(--ease-out); }
+.chk-rule[aria-expanded=true] .chev { transform: rotate(90deg); }
+@media (hover: hover) and (pointer: fine) { .chk-rule:hover { background: var(--surface-2); } }
+.st-ico { flex: none; display: inline-flex; }
+.st-ico.error { color: var(--danger); } .st-ico.warning { color: var(--warn); } .st-ico.info { color: var(--text-3); } .st-ico.pass { color: var(--ok); }
+.chk-help { padding: 0 12px 8px 36px; color: var(--text-3); font-size: 12px; line-height: 1.5; }
+.chk-f { display: block; width: 100%; padding: 6px 12px 7px 36px; border: 0; background: none; color: var(--text-2); text-align: left; cursor: pointer; font-size: 12.5px; line-height: 1.45; }
+.chk-f .m { color: var(--text); overflow-wrap: anywhere; }
+.chk-f .w { display: flex; flex-direction: column; gap: 1px; margin-top: 3px; }
+.chk-loc { font-size: 11.5px; color: var(--text-3); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chk-loc b { font: 500 11px var(--mono); color: var(--accent); margin-right: 2px; }
+.chk-loc.more { color: var(--text-3); text-decoration: underline dotted; }
+@media (hover: hover) and (pointer: fine) { .chk-f:hover { background: var(--surface-2); } .chk-loc:hover { text-decoration: underline; } }
+.chk-f[aria-current=true] { background: var(--accent-soft); }
+.chk-passed { padding: 4px 12px 14px; }
+.chk-passed div { display: flex; align-items: center; gap: 8px; height: 24px; color: var(--text-2); font-size: 12px; }
+.chk-assume { margin: 6px 12px 16px; padding: 8px 10px; border-radius: var(--r); background: var(--surface-2); color: var(--text-3); font-size: 11.5px; line-height: 1.5; }
+svg.sheet .issue rect { fill: none; stroke-width: 1.2; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; }
+svg.sheet .issue circle { stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; }
+svg.sheet .issue text { fill: #fff; font-family: var(--font); font-weight: 700; text-anchor: middle; dominant-baseline: central; }
+svg.sheet .issue.error rect { stroke: var(--danger); } svg.sheet .issue.error circle { fill: var(--danger); }
+svg.sheet .issue.warning rect { stroke: #d99a1e; } svg.sheet .issue.warning circle { fill: #d99a1e; }
+
 /* ---------- canvas ---------- */
 .stage { position: relative; min-width: 0; min-height: 0; overflow: hidden; background-color: var(--canvas); background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1.2px); background-size: 18px 18px; }
 .stage > svg.sheet { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
@@ -231,7 +266,10 @@ svg.sheet .pin { fill: #fff; stroke: var(--net); stroke-width: 1.2; vector-effec
 .statusbar .mono { font-size: 11.5px; color: var(--text-2); }
 .statusbar .item { display: flex; align-items: center; gap: 6px; }
 .statusbar .item svg { width: 13px; height: 13px; }
-.statusbar .ok { color: var(--ok); } .statusbar .warn { color: var(--warn); }
+.statusbar .ok { color: var(--ok); } .statusbar .warn { color: var(--warn); } .statusbar .err { color: var(--danger); }
+.st-check { height: 20px; padding: 0 6px; margin: 0 -6px; border: 0; border-radius: 4px; background: none; color: inherit; font-size: inherit; cursor: pointer; transition: transform 160ms var(--ease-out), background-color 150ms ease; }
+.st-check:active { transform: scale(0.97); }
+@media (hover: hover) and (pointer: fine) { .st-check:hover { background: var(--surface-3); color: var(--text-2); } }
 
 /* ---------- popovers: menus, tooltips, palette, dialogs, toasts ---------- */
 .tooltip {
@@ -290,5 +328,5 @@ svg.sheet .pin { fill: #fff; stroke: var(--net); stroke-width: 1.2; vector-effec
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-property: opacity, background-color, color, border-color !important; }
-  .btn:active, .ibtn:active, .sym:active { transform: none; }
+  .btn:active, .ibtn:active, .sym:active, .st-check:active { transform: none; }
 }

@@ -1,12 +1,18 @@
 {
   "name": "ecad-code",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "Code-first electrical CAD: schematics, panel layout and 3D box, from YAML",
+  "description": "Electrical CAD in the browser: live drawings, electrical check, panel 3D, AI port (MCP)",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server/main.js",
-    "test": "node tests/run.js"
+    "open": "node server/main.js --open",
+    "test": "node tests/run.js",
+    "check": "node tools/check.js",
+    "mcp": "node server/mcp.js"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "5.3.0",

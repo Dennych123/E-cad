@@ -4,7 +4,7 @@ Reference: SKYCAD Electrical feature page (Standard free / Advanced / Pro) and i
 read 2026-09-29 (skycad.ca/features-pricing, skycad.ca/forums/all-tutorials).
 Status: `[x]` done · `[~]` partial / data only, no UI · `[ ]` not started.
 
-## 0. Visio parity (the drawing editor) — updated 2026-09-30
+## 0. Visio parity (the drawing editor) — updated 2026-10-01
 Imported sheets open as editable documents that look exactly like the Visio export (same markup),
 and index exactly like the import (tested on all 27 pages).
 
@@ -124,9 +124,29 @@ and index exactly like the import (tested on all 27 pages).
 - [~] Maker STEP → GLB at real size (`tools/step2glb.js`, OpenCASCADE wasm), loaded per part number; needs the STEP files downloaded by hand (Omron blocks scripts); [ ] STEP export of the assembly
 - [ ] Flow chart sheets (Denso legend) — reuse `sysmac-generator/scripts/flowdoc.js`; compare against Visio `03 FLOW CHART`
 - [ ] Sensor layout sheet (Visio `02`) and system block diagram (`01`)
-- [ ] AI-editable source: YAML + JSON schema + `CLAUDE.md`, `ecad check` rules
+- [~] AI-editable source: YAML + `CLAUDE.md` + **AI port (MCP, `server/mcp.js`, 11 read-only tools)**; [ ] JSON schema, AI write tools
 - [ ] Denso standards checks (prgstd): alarm categories, naming of CR/LB/DM signals
+- [x] One-click start: `ECAD.bat` (installs once, starts, opens the browser; second click only opens a tab) + desktop shortcut icon
 - [ ] Desktop wrapper (Tauri/Electron) — only after the web app is complete
+
+## 12. Electrical check (ERC) — added 2026-10-01
+Rules in `server/checks.js` (`RULES`), loads in `library/electrical/loads.yaml` (datasheet vs assumed).
+One result feeds the Checks tab, sheet badges, status bar, `tools/check.js` (CI exit code) and MCP `ecad_check`.
+- [x] Supply shorted: P24 with Z24 (or two voltages) on one net — error
+- [x] Protected branches joined (P24A with P24B) — warning; common 0 V (Z24A with Z24B) — info
+- [x] Branch load vs circuit protector (CP rating from part code or "(3A)"), > 80 % warning, > 100 % error
+- [x] Relay contacts over the relay's poles (G7SA-3A1B = 4) — error; part outside the maker lineup — info
+- [x] Contact table beside the coil vs the lines where contacts are drawn — warning
+- [x] Contact without a coil (safety units G9SA/G9SX excluded) — warning; coil drawn twice — error
+- [x] PLC address wired twice (I/O unit sheets) — warning
+- [x] Editor sheets: loose wire ends — warning; duplicate tags — error
+- [x] Panel devices missing from every schematic — warning
+- [x] Untranslated drawing text — info
+- [x] Web: Checks tab (summary, checklist, findings → jump to the spot), sheet badges, status bar count, re-check after save, `F7` / `Shift+F7`
+- [ ] Wire gauge vs protector rating (needs wire data), voltage drop on long runs
+- [ ] Output point current vs load (NX-OD 0.5 A/point) per PLC output
+- [ ] Terminal strip overfill, duct fill % from routed wires
+- [ ] Quick-fix actions (e.g. add a missing contact-table entry)
 
 ## Use cases to test end-to-end (acceptance)
 1. Redraw PLC IO sheet `09` from YAML; PDF matches Visio side by side.

@@ -144,7 +144,7 @@ export function buildBox(box, cabinet = null, { labels = true, parts = {} } = {}
   const labelObjs = [];
 
   const bases = {
-    right: { o: new THREE.Vector3(W - tb, 0, zb), u: Y, v: Z, w: X, w_: W, h_: H },
+    right: { o: new THREE.Vector3(W - tb, 0, zb), u: Y, v: Z, w: X, w_: D, h_: H },
     left: { o: new THREE.Vector3(tb, D, zb), u: NY, v: Z, w: NX, w_: D, h_: H },
     back: { o: new THREE.Vector3(W, D - tb, zb), u: NX, v: Z, w: Y, w_: W, h_: H },
     top: { o: new THREE.Vector3(0, 0, zt - tb), u: X, v: Y, w: Z, w_: W, h_: D },
@@ -285,7 +285,13 @@ export function buildBox(box, cabinet = null, { labels = true, parts = {} } = {}
       m.userData = { kind: 'rail', tag: r.id, part: r.part };
       root.add(m);
     }
-    for (const c of components) {
+    for (const c0 of components) {
+      // A layout box can overrun the plate (a breaker drawn onto its own breaker plate above the top duct).
+      // Clip to the plate: past it the box would meet the roof and z-fight.
+      const y0c = Math.max(0, c0.y), y1c = Math.min(P.height, c0.y + c0.h), x0c = Math.max(0, c0.x), x1c = Math.min(P.width, c0.x + c0.w);
+      if (y1c <= y0c || x1c <= x0c) continue;
+      const clipped = y0c !== c0.y || y1c !== c0.y + c0.h || x0c !== c0.x || x1c !== c0.x + c0.w;
+      const c = clipped ? { ...c0, x: x0c, y: y0c, w: +(x1c - x0c).toFixed(1), h: +(y1c - y0c).toFixed(1), note: `layout box ${c0.w}×${c0.h} clipped to the plate` } : c0;
       const kind = kindOf(c);
       const dep = DEPTH[kind];
       const color = COL[kind];

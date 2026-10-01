@@ -14,6 +14,7 @@ const state = {
   project: null, projects: [], mode: '2d', drawings: [], symbols: [], components: [], dict: new Map(),
   english: (qs.get('lang') || store.get('lang', 'en')) !== 'ja', sheet: null, leftTab: store.get('leftTab', 'sheets'),
   xref: null, net: null, filter: '', openComp: null,
+  check: null, checkOpen: null, checkActive: null, checkAll: new Set(), checking: false,
 };
 const project = () => state.project;
 const tr = (s) => (state.english ? translate(s, state.dict) ?? s : s);
@@ -116,6 +117,7 @@ function setLeftTab(t) {
   for (const b of $('#leftTabs').querySelectorAll('button')) b.setAttribute('aria-selected', String(b.dataset.tab === t));
   slideIndicator($('#leftTabs'));
   renderLeft();
+  if (t === 'checks' && !state.check && project()) runCheck({ quiet: true });
 }
 $('#leftTabs').onclick = (e) => { const b = e.target.closest('[data-tab]'); if (b) setLeftTab(b.dataset.tab); };
 
@@ -123,6 +125,8 @@ function renderLeft() {
   const tools = $('#leftTools');
   if (state.leftTab === 'sheets') {
     tools.innerHTML = `<input type="search" placeholder="Filter sheets" id="leftFilter" value="${esc(state.filter)}" aria-label="Filter sheets"><button class="ibtn" data-act="newSheet" data-tip="New sheet">${icon('plus')}</button>`;
+  } else if (state.leftTab === 'checks') {
+    tools.innerHTML = `<input type="search" placeholder="Filter findings" id="leftFilter" value="${esc(state.filter)}" aria-label="Filter findings"><button class="ibtn" data-act="runCheck" data-tip="Check again" data-keys="F7" aria-label="Check again">${icon('refresh')}</button>`;
   } else {
     tools.innerHTML = `<input type="search" placeholder="${state.leftTab === 'symbols' ? 'Search symbols' : 'Search part no., maker, tag'}" id="leftFilter" value="${esc(state.filter)}" aria-label="Filter">`;
   }
@@ -130,8 +134,13 @@ function renderLeft() {
   renderLeftBody();
 }
 function renderLeftBody() {
-  if (state.leftTab === 'sheets') renderTree(); else if (state.leftTab === 'symbols') renderLibrary(); else renderComponents();
+  if (state.leftTab === 'sheets') renderTree(); else if (state.leftTab === 'symbols') renderLibrary(); else if (state.leftTab === 'checks') renderChecks(); else renderComponents();
 }
+$('#leftTools').addEventListener('click', (e) => {
+  const a = e.target.closest('[data-act]');
+  if (a?.dataset.act === 'newSheet') runCommand('newSheet');
+  if (a?.dataset.act === 'runCheck') runCheck();
+});
 
 function renderTree() {
   const q = state.filter.trim().toLowerCase();
@@ -164,7 +173,11 @@ function renderLibrary() {
       `<div class="sym ${s.id === armed ? 'armed' : ''}" draggable="true" data-sym="${esc(s.id)}" title="${esc(s.name)}${s.master ? ' · Visio master ' + esc(s.masterEn || s.master) : ''} · used ${s.count}× in this project">${symbolPreview(s)}<span class="nm">${esc(s.name)}</span></div>`).join('')}</div>`).join('');
   $('#leftBody').innerHTML = html || `<div class="empty">${state.symbols.length ? 'No symbol matches.' : 'No symbol library yet. Run <span class="mono">node tools/extract-symbols.js ' + esc(project() || '<project>') + '</span>.'}</div>`;
 }
+$('#leftBody').addEventListener('keydown', (e) => {
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.chk-f')) { e.preventDefault(); e.stopPropagation(); checksClick(e); }
+});
 $('#leftBody').addEventListener('click', async (e) => {
+  if (state.leftTab === 'checks' && checksClick(e)) return;
   const a = e.target.closest('[data-p]');
   if (a) return openSheet(a.dataset.p);
   const s = e.target.closest('[data-sym]');
@@ -201,6 +214,107 @@ function renderComponents() {
     return `${head}<div class="comp ${open ? 'open' : ''}" data-comp="${esc(c.part)}"><span class="pn">${esc(c.part)}</span><span class="mk">${esc(c.maker || '')}</span>${c.name ? `<span class="ds">${esc(c.name)}</span>` : ''}${det}</div>`;
   }).join('') || '<div class="empty">No components match.</div>';
 }
+
+// ======================================================================== electrical check
+const SEV_ICON = { error: 'error', warning: 'alert', info: 'info', pass: 'pass' };
+const SEV_RANK = { error: 0, warning: 1, info: 2, pass: 3 };
+const stIco = (s) => `<span class="st-ico ${s}">${icon(SEV_ICON[s])}</span>`;
+function pageOf(pid) { for (const d of state.drawings) for (const p of d.pages) if (p.id === pid) return { d, p }; return null; }
+// a sheet name that says where it is: bare page names ("2", "Page-1") get the drawing's name in front
+function sheetShort(o) {
+  const name = tr(o.p.name).trim();
+  if (!/^(page-?\s*)?\d+$/i.test(name)) return name;
+  return `${o.d.title.replace(/^\d{4}-[A-Z]\d{3}-\d{4}(-\d)?\s+/, '').replace(/\s+OK$/i, '')} · ${name}`;
+}
+function locLabel(w) {
+  if (w.cabinet) return { lead: w.key, text: `cabinet ${w.cabinet}`, title: `Show ${w.key} in cabinet ${w.cabinet} (3D)` };
+  const o = pageOf(w.page);
+  return { lead: w.line || (w.shape == null ? w.key : '') || '', text: o ? sheetShort(o) : w.page, title: o ? `${o.d.title} · ${tr(o.p.name)}` : w.page };
+}
+
+async function runCheck({ quiet = false } = {}) {
+  if (!project() || state.checking) return;
+  state.checking = true;
+  if (state.leftTab === 'checks') $('#leftTools [data-act=runCheck]')?.setAttribute('disabled', '');
+  try {
+    state.check = await api('/api/check/' + encodeURIComponent(project()));
+    if (!state.checkOpen) state.checkOpen = new Set(state.check.checklist.filter((c) => c.status === 'error' || c.status === 'warning').map((c) => c.id));
+    if (!quiet) { const s = state.check.summary; toast(s.errors || s.warnings ? `Check: ${s.errors} error(s), ${s.warnings} warning(s)` : 'Check passed — no errors or warnings', { kind: s.errors ? 'err' : s.warnings ? 'info' : 'ok', duration: 2200 }); }
+  } catch (e) { if (!quiet) toast('Check failed: ' + e.message, { kind: 'err' }); }
+  finally { state.checking = false; }
+  renderCheckStatus();
+  if (state.leftTab === 'checks') renderLeft();
+  showIssues();
+}
+function showIssues() {
+  if (!state.check || !state.sheet) { editor.setIssues([]); return; }
+  const list = [];
+  for (const f of state.check.findings) if (f.severity !== 'info') for (const w of f.where || []) if (w.page === state.sheet && (w.shape != null || w.key)) list.push({ shape: w.shape, key: w.key, severity: f.severity });
+  editor.setIssues(list);
+}
+function renderCheckStatus() {
+  const c = state.check, b = $('#stCheck'), dot = $('#checkDot');
+  if (!c) { b.hidden = true; dot.hidden = true; return; }
+  const { errors: e, warnings: w } = c.summary;
+  b.hidden = false;
+  b.innerHTML = e || w ? `${e ? `<span class="err row" style="gap:4px">${icon('error')}${e}</span>` : ''}${w ? `<span class="warn row" style="gap:4px">${icon('alert')}${w}</span>` : ''}` : `<span class="ok row" style="gap:4px">${icon('pass')}Check passed</span>`;
+  b.setAttribute('aria-label', `Electrical check: ${e} errors, ${w} warnings`);
+  dot.hidden = !(e || w); dot.classList.toggle('error', !!e);
+}
+function renderChecks() {
+  const c = state.check;
+  if (!c) { $('#leftBody').innerHTML = `<div class="empty">${state.checking ? 'Checking…' : 'Not checked yet.'}</div>`; return; }
+  const q = state.filter.trim().toLowerCase();
+  const byRule = new Map(c.checklist.map((r) => [r.id, []]));
+  c.findings.forEach((f, i) => { if (!q || `${f.message} ${f.rule} ${(f.where || []).map((w) => `${w.key || ''} ${w.line || ''}`).join(' ')}`.toLowerCase().includes(q)) byRule.get(f.rule)?.push(i); });
+  const t = new Date(c.at);
+  let html = `<div class="chk-sum"><div class="n err ${c.summary.errors ? 'hot' : ''}"><b>${c.summary.errors}</b><span>errors</span></div><div class="n warn ${c.summary.warnings ? 'hot' : ''}"><b>${c.summary.warnings}</b><span>warnings</span></div><div class="n"><b>${c.summary.info}</b><span>notes</span></div></div>
+    <div class="chk-at faint">${c.checklist.length} rules · checked ${t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${q ? ` · filtered by “${esc(q)}”` : ''}</div>`;
+  const failing = c.checklist.filter((r) => r.status !== 'pass').sort((a, b) => SEV_RANK[a.status] - SEV_RANK[b.status]);
+  for (const r of failing) {
+    const idx = byRule.get(r.id);
+    if (q && !idx.length) continue;
+    const open = !!q || state.checkOpen.has(r.id);
+    html += `<button class="chk-rule" data-rule="${esc(r.id)}" aria-expanded="${open}">${stIco(r.status)}<span class="t">${esc(r.title)}</span><span class="c">${idx.length}</span><span class="chev">${icon('chevron')}</span></button>`;
+    if (!open) continue;
+    html += `<div class="chk-help">${esc(r.help)}</div>`;
+    for (const i of idx) {
+      const f = c.findings[i], ws = f.where || [], all = state.checkAll.has(i), shown = all ? ws : ws.slice(0, 3);
+      html += `<div class="chk-f" role="button" tabindex="0" data-f="${i}" ${state.checkActive === i ? 'aria-current="true"' : ''}><div class="m">${esc(f.message)}</div>${ws.length ? `<div class="w">${shown.map((w, k) => { const l = locLabel(w); return `<span class="chk-loc" data-loc="${i}:${k}" title="${esc(l.title)}">${l.lead ? `<b>${esc(l.lead)}</b> ` : ''}${esc(l.text)}</span>`; }).join('')}${ws.length > shown.length ? `<span class="chk-loc more" data-more="${i}">+${ws.length - shown.length} more</span>` : ''}</div>` : ''}</div>`;
+    }
+  }
+  const passed = c.checklist.filter((r) => r.status === 'pass');
+  if (passed.length && !q) html += `<div class="lib-cat"><span>Passed</span><span class="n">${passed.length}</span></div><div class="chk-passed">${passed.map((r) => `<div title="${esc(r.help)}">${stIco('pass')}<span>${esc(r.title)}</span></div>`).join('')}</div>`;
+  if (c.assumptions?.length && !q) html += `<div class="chk-assume"><b>Assumed values</b> (no datasheet figure in library/electrical/loads.yaml):<br>${c.assumptions.map(esc).join('<br>')}</div>`;
+  $('#leftBody').innerHTML = html;
+}
+async function goWhere(w) {
+  if (!w) return;
+  if (w.cabinet) { await setMode('3d'); await panel3d.load(w.cabinet, w.cabinet); if (w.key) panel3d.selectTag(w.key); renderToolbar(); return; }
+  if (state.mode !== '2d') await setMode('2d');
+  if (!(await openSheet(w.page))) return;
+  if (w.shape != null) { editor.focusShape(w.shape, w.key); return; }
+  if (w.key) {
+    const x = await api(`/api/xref/${encodeURIComponent(project())}?key=${encodeURIComponent(w.key)}`);
+    const o = x.occurrences.find((q) => q.page === w.page);
+    if (o) { state.xref = x; state.xrefActive = x.occurrences.indexOf(o); editor.focusShape(o.id, w.key); renderInspector(); return; }
+  }
+  if (w.line) await gotoLine(w.line, w.page);
+}
+function checksClick(e) {
+  const r = e.target.closest('[data-rule]');
+  if (r) { const id = r.dataset.rule; state.checkOpen.has(id) ? state.checkOpen.delete(id) : state.checkOpen.add(id); renderChecks(); return true; }
+  const m = e.target.closest('[data-more]');
+  if (m) { state.checkAll.add(Number(m.dataset.more)); renderChecks(); return true; }
+  const l = e.target.closest('[data-loc]'), f = e.target.closest('[data-f]');
+  if (!l && !f) return false;
+  const [fi, wi] = l ? l.dataset.loc.split(':').map(Number) : [Number(f.dataset.f), 0];
+  state.checkActive = fi;
+  for (const x of $('#leftBody').querySelectorAll('.chk-f')) { if (Number(x.dataset.f) === fi) x.setAttribute('aria-current', 'true'); else x.removeAttribute('aria-current'); }
+  goWhere(state.check.findings[fi].where?.[wi]);
+  return true;
+}
+$('#stCheck').onclick = () => runCommand('checks');
 
 // ======================================================================== inspector (drawings)
 const num = (v) => (Math.round(v * 10) / 10).toFixed(1);
@@ -320,6 +434,7 @@ async function openSheet(id, { force = false } = {}) {
   } catch (e) { toast(e.message, { kind: 'err' }); return false; }
   state.sheet = id; store.set('sheet.' + project(), id);
   state.net = null;
+  showIssues();
   const dr = state.drawings.find((d) => d.pages.some((p) => p.id === id));
   $('#crumbDrawing').textContent = dr?.title || '';
   $('#sheetName').textContent = tr(editor.doc.name);
@@ -361,7 +476,7 @@ const in3d = () => state.mode === '3d';
 const tools = [['select', 'select', 'Select', 'v'], ['pan', 'pan', 'Pan', 'h'], ['wire', 'wire', 'Wire', 'w'], ['line', 'line', 'Line', 'l'], ['rect', 'rect', 'Rectangle', 'b'], ['ellipse', 'ellipse', 'Ellipse', 'e'], ['text', 'text', 'Text', 't']];
 for (const [id, ic, title, key] of tools) command({ id: 'tool.' + id, title: `${title} tool`, group: 'Tools', icon: ic, keys: key, when: in2d, run: () => editor.setTool(id) });
 command({ id: 'save', title: 'Save sheet', group: 'Sheet', icon: 'save', keys: 'mod+s', when: in2d, run: async () => {
-  try { await editor.save(); toast('Sheet saved'); await refreshDrawings(); renderInspector(); }
+  try { await editor.save(); toast('Sheet saved'); await refreshDrawings(); renderInspector(); runCheck({ quiet: true }); }
   catch (e) {
     if (e.status === 409) { const r = await confirmDialog('Sheet changed elsewhere', 'Another window saved this sheet after you opened it. Overwrite it with your version?', 'Overwrite', true); if (r) { editor.doc.rev = undefined; try { await editor.save(); toast('Sheet saved'); } catch (e2) { toast(e2.message, { kind: 'err' }); } } }
     else toast(e.message, { kind: 'err' });
@@ -428,17 +543,17 @@ command({ id: 'newSheet', title: 'New sheet', group: 'Sheet', icon: 'plus', run:
   const dr = state.drawings.find((d) => d.pages.some((p) => p.id === state.sheet));
   try {
     const r = await api(`/api/page/${encodeURIComponent(project())}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, drawing: dr?.file || 'custom', like: state.sheet }) });
-    await refreshDrawings(); await openSheet(r.id); toast('Sheet created');
+    await refreshDrawings(); await openSheet(r.id); toast('Sheet created'); runCheck({ quiet: true });
   } catch (e) { toast(e.message, { kind: 'err' }); }
 } });
 command({ id: 'rename', title: 'Rename sheet', group: 'Sheet', icon: 'text', when: in2d, run: async () => {
   const name = await prompt('Rename sheet', tr(editor.doc.name), 'Rename'); if (!name || name === editor.doc.name) return;
-  try { await editor.rename(name); $('#sheetName').textContent = tr(name); await refreshDrawings(); toast('Sheet renamed'); } catch (e) { toast(e.message, { kind: 'err' }); }
+  try { await editor.rename(name); $('#sheetName').textContent = tr(name); await refreshDrawings(); toast('Sheet renamed'); runCheck({ quiet: true }); } catch (e) { toast(e.message, { kind: 'err' }); }
 } });
 $('#sheetName').ondblclick = () => runCommand('rename');
 command({ id: 'deleteSheet', title: 'Delete sheet', group: 'Sheet', icon: 'trash', when: () => in2d() && editor.doc.saved && !editor.doc.source, run: async () => {
   if (!(await confirmDialog('Delete this sheet?', `"${tr(editor.doc.name)}" will be moved out of the project (kept as a .deleted file).`, 'Delete', true))) return;
-  try { await api(`/api/doc/${encodeURIComponent(project())}/${encodeURIComponent(state.sheet)}`, { method: 'DELETE' }); state.sheet = null; await refreshDrawings(); const first = state.drawings[0]?.pages[0]?.id; if (first) await openSheet(first, { force: true }); toast('Sheet deleted'); } catch (e) { toast(e.message, { kind: 'err' }); }
+  try { await api(`/api/doc/${encodeURIComponent(project())}/${encodeURIComponent(state.sheet)}`, { method: 'DELETE' }); state.sheet = null; await refreshDrawings(); const first = state.drawings[0]?.pages[0]?.id; if (first) await openSheet(first, { force: true }); toast('Sheet deleted'); runCheck({ quiet: true }); } catch (e) { toast(e.message, { kind: 'err' }); }
 } });
 command({ id: 'export', title: 'Export sheet as SVG', group: 'Sheet', icon: 'download', when: in2d, run: () => {
   const blob = new Blob([editor.exportSvg()], { type: 'image/svg+xml' });
@@ -457,6 +572,19 @@ command({ id: 'labels', title: 'Labels', group: '3D', icon: 'tag', keys: 'l', wh
 command({ id: 'wires3d', title: 'Wires', group: '3D', icon: 'cable', keys: 'w', when: in3d, run: () => { panel3d.toggleWires(); renderToolbar(); } });
 command({ id: 'fit3d', title: 'Fit 3D view', group: '3D', icon: 'fit', keys: 'Home', when: in3d, run: () => panel3d.fit() });
 command({ id: 'projects', title: 'Switch project', group: 'Navigate', icon: 'panel', run: () => $('#projectBtn').click() });
+command({ id: 'runCheck', title: 'Run electrical check', group: 'Check', icon: 'shield', keys: 'F7', when: () => !!project(), run: async () => { if (state.mode !== '2d') await setMode('2d'); if (!leftOpen) runCommand('toggleLeft'); if (state.leftTab !== 'checks') setLeftTab('checks'); await runCheck(); } });
+command({ id: 'checks', title: 'Show electrical check results', group: 'Check', icon: 'shield', when: () => !!project(), run: async () => { if (state.mode !== '2d') await setMode('2d'); if (!leftOpen) runCommand('toggleLeft'); setLeftTab('checks'); } });
+command({ id: 'nextIssue', title: 'Next check finding', group: 'Check', icon: 'alert', keys: 'shift+F7', when: () => !!state.check?.findings.length, run: () => {
+  const order = state.check.findings.map((f, i) => i).filter((i) => state.check.findings[i].severity !== 'info');
+  if (!order.length) return;
+  const next = order[(order.indexOf(state.checkActive) + 1) % order.length];
+  state.checkActive = next;
+  const f = state.check.findings[next];
+  state.checkOpen?.add(f.rule);
+  if (state.leftTab === 'checks') renderChecks();
+  goWhere(f.where?.[0]);
+  toast(f.message, { kind: f.severity === 'error' ? 'err' : 'info', duration: 3000 });
+} });
 
 stage2d.addEventListener('contextmenu', (e) => {
   if (!editor.doc || editor.tool !== 'select') return;
@@ -494,13 +622,15 @@ async function loadProject(p) {
     api('/api/sheets/' + encodeURIComponent(p)), api('/api/symbols/' + encodeURIComponent(p)).catch(() => []),
     api('/api/components/' + encodeURIComponent(p)).catch(() => []), api('/api/i18n/' + encodeURIComponent(p)).catch(() => ({})),
   ]);
-  Object.assign(state, { drawings, symbols, components, dict: buildDict(dict), xref: null, net: null, sheet: null });
+  Object.assign(state, { drawings, symbols, components, dict: buildDict(dict), xref: null, net: null, sheet: null, check: null, checkOpen: null, checkActive: null, checkAll: new Set() });
+  renderCheckStatus();
   // part-number suggestions for symbols (shape data), from the component catalogue
   let dl = $('#partList'); if (!dl) { dl = document.createElement('datalist'); dl.id = 'partList'; document.body.append(dl); }
   dl.innerHTML = components.map((c) => `<option value="${esc(c.part)}">${esc([c.maker, c.category].filter(Boolean).join(' · '))}</option>`).join('');
   editor.setDict(state.dict); editor.setLanguage(state.english); editor.setSymbols(symbols);
   panel3d.reset();
   renderLeft();
+  runCheck({ quiet: true });
   const want = qs.get('sheet') || store.get('sheet.' + p, drawings[0]?.pages[0]?.id);
   const exists = drawings.some((d) => d.pages.some((x) => x.id === want));
   const first = exists ? want : drawings[0]?.pages[0]?.id;

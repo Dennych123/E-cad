@@ -42,19 +42,41 @@ Architecture decisions: `docs/ARCHITECTURE.md`. Feature checklist vs SKYCAD Elec
 
 ## Web app (the product)
 ```
+ECAD.bat                       # one click on Windows: installs packages once, starts the server, opens the browser
 npm install
 npm start                      # http://127.0.0.1:7670/  ?project=&mode=2d|3d&sheet=&key=&box=&cabinet=&door=90&xray=1
 npm test                       # node tests/run.js: unit, JS<->Python parity, real-browser clicks (Edge/Chrome over CDP)
+node tools/check.js <project> [--json] [--fail-on error|warning]   # electrical check; exit 1 on findings (CI)
+node server/mcp.js             # MCP server (AI port), registered for Claude Code by .mcp.json
 node tools/step2glb.js <maker.stp> --part <P/N> --front -y --up +z    # maker STEP -> GLB at real size
 node tools/extract-symbols.js <project>     # symbol library from the imported drawings (+ symbols/names.yaml curation)
+node tools/make-icon.js        # web/ecad.ico from the app mark (desktop shortcut)
 ```
+- `server/project.js` is the one project context behind the HTTP API (`server/main.js`), the MCP server and
+  the CLI tools: index, xref, nets, wires, catalogue, check. Add a capability there, then expose it in each.
+- `--open` opens the browser once listening; when ecad already runs on the port it only opens the browser.
 - `lib/` is shared by Node and browser, never imports three: `box.js`/`expr.js` (templates), `nets.js`
   (connectivity), `route.js` (duct routing). A net lit on screen is exactly the net a wire list is built from.
 - three.js served from `node_modules` via importmap (`/vendor/three/`), never a CDN. No Rapier: the door is a
   kinematic hinge DOF (`setDoor(deg)`).
 - 3D world: mm, Z up, x = width from the front-left, y = depth (front 0), z = height from the floor.
   Every face basis in `web/view3d.js` is right-handed with `w` = outward normal (bottom is the exception).
-- Server binds 127.0.0.1; API is read-only for now; static paths cannot escape their mapped folder.
+- Server binds 127.0.0.1 (`--lan` for the LAN); writes only from this PC unless `--lan-edit`; static paths
+  cannot escape their mapped folder.
+
+## Electrical check (server/checks.js) and the AI port (server/mcp.js)
+- Rules are data: `RULES` = `{ id, title, severity, help }`; `runChecks()` returns `summary`, a `checklist`
+  (one row per rule: pass/info/warning/error) and `findings` with `where: [{ page, shape, line, key } | { cabinet, key }]`.
+  The web Checks tab, the sheet badges, the CLI and MCP all read this one result - keep its shape stable.
+- A coil is the relay tag within 70 pt of a relay part label (`G7SA-3A1B`, `LY2N`, `MY4N`); every other
+  occurrence of the tag is a contact. Never decide coil vs contact by "same line" - contacts share lines.
+  `CRx-1` counts as `CRx`. A G9SA/G9SX text near a tag makes it a safety unit, not a relay.
+- Loads in `library/electrical/loads.yaml` carry `source: datasheet | assumed`; budget findings list the
+  assumed values. Never present an estimate as a measured current.
+- Every new rule gets a synthetic case in `tests/checks.test.js`, and the project test must stay free of
+  false errors (a false error teaches users to ignore the checker).
+- MCP: JSON-RPC 2.0 over stdio, one message per line; stdout carries protocol only (logs to stderr); tools
+  are read-only; project names must match `NAME_RE` in `server/store.js` (no paths).
 
 ## Reading Denso Visio sheets (each rule cost a wrong net once)
 - The L-number margin (`L1001`, `L1002`, ...) is the line address. A margin column counts up by one;
@@ -81,7 +103,8 @@ from a temp copy. Big pages fail PNG export in Visio: render the SVG with headle
 ## Layout
 - `ecad/importer/` Visio COM dump; raw pages `projects/<p>/raw/<file>/pNN.json` (page mm, bottom-left origin).
 - `server/sheets.js` sheet index (texts, rows, segments, device ownership); `server/connections.js` nets -> wires.
-- `web/sheets.js` live 2D; `web/view3d.js` 3D; `web/app.js` shell; `tests/lib/cdp.js` browser driver.
+- `web/editor.js` 2D editor; `web/view3d.js` + `web/panel3d.js` 3D; `web/app.js` shell (tabs: sheets, symbols,
+  parts, checks); `web/ui.js` menus/dialogs/toasts/palette; `tests/lib/cdp.js` browser driver.
 - Templates: `library/boxes` (generic), `projects/<p>/boxes|modules` (project, private). Cabinets: `projects/<p>/cabinets`.
 
 ## YAML conventions

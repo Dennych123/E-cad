@@ -1,0 +1,27 @@
+# Load currents used by the electrical checker to estimate how much each 24 V branch draws.
+# `source: datasheet` values come from the maker's data; `source: assumed` values are typical figures
+# for the device class and are shown as assumptions in every finding that uses them. Override any of
+# these per project in projects/<p>/electrical.yaml (same keys).
+
+relay_coil:
+  # Omron G7SA, 24 VDC coil: 4-pole (2A2B, 3A1B) 15 mA, 6-pole (3A3B, 4A2B, 5A1B) 20.8 mA
+  - { match: "^G7SA-(2A2B|3A1B)", amps: 0.015, source: datasheet, ref: "Omron G7SA specifications" }
+  - { match: "^G7SA-", amps: 0.0208, source: datasheet, ref: "Omron G7SA specifications (6-pole)" }
+  - { match: "^(LY|MY)\\d", amps: 0.037, source: assumed, ref: "typical 24 VDC plug-in relay coil" }
+  - { match: ".", amps: 0.03, source: assumed, ref: "typical 24 VDC relay coil" }
+
+plc_input_point:
+  # Omron NX-ID5142-1: 7 mA typical per input at 24 VDC
+  - { match: "^NX-ID", amps: 0.007, source: datasheet, ref: "Omron NX-ID5142-1 specifications" }
+  - { match: ".", amps: 0.007, source: assumed, ref: "typical 24 VDC PLC input" }
+
+solenoid:
+  - { match: ".", amps: 0.025, source: assumed, ref: "typical 0.6 W 24 VDC solenoid valve" }
+pilot_lamp:
+  - { match: ".", amps: 0.015, source: assumed, ref: "typical 24 VDC LED pilot lamp" }
+buzzer:
+  - { match: ".", amps: 0.03, source: assumed, ref: "typical 24 VDC buzzer" }
+
+# known relay lineups: a coil part outside these is flagged for checking
+lineup:
+  G7SA: ["2A2B", "3A1B", "3A3B", "4A2B", "5A1B"]

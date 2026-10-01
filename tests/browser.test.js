@@ -91,6 +91,53 @@ export default function (t) {
     });
   });
 
+  t('checks: the tab lists the findings; clicking one opens its sheet and frames the spot; the sheet shows issue badges', async () => {
+    ready();
+    await withApp('6451-M014', async (b) => {
+      await b.eval(`document.querySelector('#leftTabs [data-tab="checks"]').click()`);
+      await b.waitFor(`document.querySelectorAll('#leftBody .chk-f').length > 0`, 15000);
+      const api = await (await fetch(`http://127.0.0.1:${PORT}/api/check/6451-M014`)).json();
+      const sum = await b.eval(`[...document.querySelectorAll('#leftBody .chk-sum b')].map(e => +e.textContent)`);
+      t.eq(sum, [api.summary.errors, api.summary.warnings, api.summary.info]);
+      t.ok(await b.eval(`!document.querySelector('#stCheck').hidden`), 'status bar shows the check result');
+      const i = api.findings.findIndex((f) => f.rule === 'relay.table-mismatch' && f.where?.[0]?.shape != null);
+      t.ok(i >= 0, 'a contact-table finding with a location');
+      await b.eval(`document.querySelector('#leftBody [data-f="${i}"]').click()`);
+      await b.waitFor(`window.ecadDebug.state.sheet === ${JSON.stringify(api.findings[i].where[0].page)}`, 10000);
+      await b.waitFor(`document.querySelectorAll('#stage2d .focus').length === 1`);
+      t.ok(await b.eval(`document.querySelectorAll('#stage2d .issue.warning').length > 0`), 'issue badges on the sheet');
+      t.eq(b.errors(), []);
+    });
+  });
+
+  t('3D: every body panel has the enclosure size, and no component pokes out of the box', async () => {
+    ready();
+    await withApp('6451-M014', async (b) => {
+      await b.eval(`window.ecadDebug.setMode('3d')`);
+      await b.waitFor(`!!window.ecadDebug.panel3d.debug.model`, 15000);
+      // expected sizes come from the project's own box template (its numbers stay out of this public repo)
+      const r = await b.eval(`(async () => {
+        const THREE = await import('three');
+        const p = window.ecadDebug.panel3d, m = p.debug.model, faces = {}, out = [];
+        const box = await (await fetch('/api/box/' + encodeURIComponent(p.boxId) + '?project=6451-M014')).json();
+        const e = box.enclosure, W = e.width, D = e.depth, H = e.height, st = e.stand_height || 0;
+        const tb = e.thickness?.body ?? 2, td = e.thickness?.door ?? e.thickness?.plate ?? tb;
+        m.root.updateMatrixWorld(true);
+        m.root.traverse((o) => {
+          if (!o.isMesh) return;
+          const bb = new THREE.Box3().setFromObject(o);
+          const s = bb.getSize(new THREE.Vector3());
+          if (o.userData.kind === 'body') faces[o.userData.face] = [s.x, s.y, s.z].map((v) => Math.round(v));
+          if (o.userData.kind === 'component' && (bb.max.z > st + H - tb || bb.max.y > D - tb || bb.min.x < tb || bb.max.x > W - tb)) out.push(o.userData.tag);
+        });
+        const R = (a) => a.map((v) => Math.round(v));
+        return { faces, out, want: { right: R([tb, D, H]), left: R([tb, D, H]), back: R([W, tb, H]), top: R([W, D, tb]), door: R([W, td, H]) } };
+      })()`);
+      for (const f of ['right', 'left', 'back', 'top', 'door']) t.eq(r.faces[f], r.want[f], `${f} panel size`);
+      t.eq(r.out, [], 'components outside the enclosure');
+    });
+  });
+
   t('editor: place a symbol, glue a wire to it, move it, undo, save, reload - and the index knows the new tag', async () => {
     ready();
     const tp = tempProject();

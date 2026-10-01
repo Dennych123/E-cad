@@ -28,7 +28,7 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
   // ------------------------------------------------------------------ load / render
   async function open(id) {
     const d = await api(`/api/doc/${encodeURIComponent(project())}/${encodeURIComponent(id)}`);
-    doc = d; els = d.elements; saved = els; past = []; future = []; sel = new Set();
+    doc = d; els = d.elements; saved = els; past = []; future = []; sel = new Set(); issues = []; marks = []; netHi = null;
     build();
     fit();
     reindex(true);
@@ -229,7 +229,18 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
   }
 
   // ------------------------------------------------------------------ overlay
-  let hoverId = null, netHi = null, marks = [];
+  let hoverId = null, netHi = null, marks = [], issues = [];
+  // electrical-check findings on this sheet: a dashed box round the text plus a badge, constant on screen
+  function issuesSvg() {
+    if (!issues.length || !pageIx) return '';
+    const r = pxToPt(6.5), pad = pxToPt(2);
+    return issues.map((i) => {
+      const t = pageIx.texts.find((q) => q.id === i.shape) || (i.key && pageIx.texts.find((q) => q.keys.includes(i.key)));
+      if (!t) return '';
+      const [x, y, w] = t.box;
+      return `<g class="issue ${i.severity}">${rectSvg(t.box, pad, '')}<circle cx="${f2(x + w + pad)}" cy="${f2(y - pad)}" r="${f2(r)}"/><text x="${f2(x + w + pad)}" y="${f2(y - pad)}" font-size="${f2(r * 1.5)}">!</text></g>`;
+    }).join('');
+  }
   function drawOverlay(extra = '') {
     if (!ovl) return;
     const pad = pxToPt(3);
@@ -240,7 +251,7 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
     if (sel.size === 1) { const e = byId([...sel][0]); if (e) for (const [x, y] of snapPoints(e)) h += `<circle class="pin" cx="${x}" cy="${y}" r="${f2(pxToPt(3))}"/>`; }
     if (netHi) h += netHi.map((s) => `<line class="net-hi" x1="${s[0]}" y1="${s[1]}" x2="${s[2]}" y2="${s[3]}"/>`).join('');
     for (const m of marks) h += m.kind === 'band' ? `<rect class="band" x="${m.x}" y="${m.y}" width="${m.w}" height="${m.h}"/>` : rectSvg(m.box, 2.5, m.kind);
-    ovl.innerHTML = h + extra;
+    ovl.innerHTML = issuesSvg() + h + extra;
   }
   const rectSvg = ([x, y, w, h], p, cls) => `<rect class="${cls}" x="${f2(x - p)}" y="${f2(y - p)}" width="${f2(w + 2 * p)}" height="${f2(h + 2 * p)}" rx="1.5"/>`;
 
@@ -759,6 +770,8 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
     startPlace, dropSymbol, setSymbols, setLanguage, focusShape, gotoRow, finishDraft,
     async rename(name) { if (!doc) return; doc.name = name; saved = null; emitChange(); return save(); },
     setDict(d) { dict = d; },
+    /** findings of the electrical check on this sheet: [{ shape, key, severity }] */
+    setIssues(list) { issues = list || []; drawOverlay(); },
     get doc() { return doc ? { ...doc, elements: els } : null; },
     get dirty() { return !!doc && els !== saved; },
     get tool() { return tool; },

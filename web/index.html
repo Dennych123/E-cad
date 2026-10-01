@@ -44,7 +44,8 @@
       <div class="tabs" role="tablist" id="leftTabs"><span class="ind"></span>
         <button role="tab" aria-selected="true" data-tab="sheets">Sheets</button>
         <button role="tab" aria-selected="false" data-tab="symbols">Symbols</button>
-        <button role="tab" aria-selected="false" data-tab="components">Components</button>
+        <button role="tab" aria-selected="false" data-tab="components" data-tip="Component catalogue">Parts</button>
+        <button role="tab" aria-selected="false" data-tab="checks" data-tip="Electrical check" data-keys="F7">Checks<span class="tab-dot" id="checkDot" hidden></span></button>
       </div>
       <div class="pane-tools" id="leftTools"></div>
       <div class="pane-body" id="leftBody"></div>
@@ -60,6 +61,7 @@
     <span class="item" id="stTool"></span>
     <span class="item" id="stSel"></span>
     <span class="spacer"></span>
+    <button class="item st-check" id="stCheck" data-tip="Electrical check — open the list" data-keys="F7" hidden></button>
     <span class="item" id="stIndex"></span>
     <span class="item" id="stSave"></span>
   </footer>

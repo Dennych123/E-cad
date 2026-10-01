@@ -1,18 +1,15 @@
 // ecad-code web app server: static files + JSON API over the YAML library and the projects.
-//   node server/main.js [--port 7670] [--lan] [--lan-edit]
-// Binds to 127.0.0.1 unless --lan. Writes (save sheet, new page, delete) are refused unless the
-// request comes from this PC, or the server was started with --lan-edit.
+//   node server/main.js [--port 7670] [--lan] [--lan-edit] [--open]
+// Binds to 127.0.0.1 unless --lan. --open opens the app in the default browser (ECAD.bat uses it). Writes (save sheet, new page, delete, save symbol) are refused
+// unless the request comes from this PC, or the server was started with --lan-edit.
+// The same project logic answers the MCP server (server/mcp.js) and the CLI (tools/check.js).
 import http from 'node:http';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import yaml from 'js-yaml';
-import { createStore, NAME_RE } from './store.js';
-import { createDocStore, blankDoc } from './docs.js';
-import { buildSheetIndex } from './sheets.js';
-import { cabinetWires } from './connections.js';
-import { buildCatalog } from './components.js';
-import { routeWires } from '../lib/route.js';
+import { blankDoc } from './docs.js';
+import { createProjectContext } from './project.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -28,40 +25,9 @@ const STATIC = {
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.glb': 'model/gltf-binary', '.wasm': 'application/wasm', '.woff2': 'font/woff2', '.woff': 'font/woff' };
 
-const store = createStore(root);
-const docs = createDocStore(root);
-const P = (project) => { if (!NAME_RE.test(project)) throw new Error('bad project'); return path.join(root, 'projects', project); };
-const readYaml = (f) => (fs.existsSync(f) ? yaml.load(fs.readFileSync(f, 'utf8')) || {} : {});
-
-// project sheet index, rebuilt after every save (whole project: ~0.5 s)
-const sheetIx = new Map();
-function sheets(project) {
-  P(project);
-  if (!sheetIx.has(project)) sheetIx.set(project, buildSheetIndex(docs, project));
-  return sheetIx.get(project);
-}
-function xrefOf(project, key) {
-  const ix = sheets(project);
-  const occ = ix.xref.get(key) || [];
-  const cab = store.cabinets(project).flatMap((c) => (store.cabinet(project, c).components || [])
-    .filter((x) => x.tag.toUpperCase() === key).map((x) => ({ cabinet: c, tag: x.tag, part: x.part || null, rail: x.rail || null })));
-  return { key, occurrences: occ, line: ix.lineIndex.get(key) || null, cabinet: cab };
-}
-function symbols(project) {
-  const read = (n) => { const f = path.join(P(project), 'symbols', n); return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')).symbols : []; };
-  // extracted library + symbols users saved from their own selections
-  return [...read('library.json'), ...read('custom.json')].filter((s) => !s.hidden).map(({ instances, ...s }) => s);
-}
-function i18n(project) {
-  return { ...readYaml(path.join(root, 'library', 'i18n', 'ja-en.yaml')), ...readYaml(path.join(P(project), 'i18n', 'ja-en.yaml')) };
-}
-function catalog(project) {
-  const mdir = path.join(P(project), 'modules');
-  const modules = fs.existsSync(mdir) ? fs.readdirSync(mdir).filter((f) => f.endsWith('.yaml')).map((f) => ({ id: f.slice(0, -5), ...readYaml(path.join(mdir, f)) })) : [];
-  const cabinets = store.cabinets(project).map((c) => ({ id: c, ...store.cabinet(project, c) }));
-  const parts = store.parts();
-  return buildCatalog({ modules, cabinets, index: sheets(project) }).map((c) => ({ ...c, model: parts[c.part]?.model || null }));
-}
+const ctx = createProjectContext(root);
+const { store, docs } = ctx;
+const projectDir = (project) => path.join(root, 'projects', project);
 
 function json(res, code, data) {
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -99,32 +65,22 @@ function body(req, limit = 32 << 20) {
 const dec = decodeURIComponent;
 
 const GET = [
-  [/^\/api\/projects$/, () => store.projects()],
+  [/^\/api\/projects$/, () => ctx.projects()],
   [/^\/api\/parts$/, () => store.parts()],
   [/^\/api\/boxes$/, (m, q) => store.boxes(q.get('project') || null)],
   [/^\/api\/box\/([^/]+)$/, (m, q) => store.box(dec(m[1]), q.get('project') || null)],
   [/^\/api\/cabinets\/([^/]+)$/, (m) => store.cabinets(dec(m[1]))],
   [/^\/api\/cabinet\/([^/]+)\/([^/]+)$/, (m) => store.cabinet(dec(m[1]), dec(m[2]))],
-  [/^\/api\/sheets\/([^/]+)$/, (m) => sheets(dec(m[1])).drawings],
+  [/^\/api\/sheets\/([^/]+)$/, (m) => ctx.sheets(dec(m[1]))],
   [/^\/api\/doc\/([^/]+)\/(.+)$/, (m) => { const d = docs.get(dec(m[1]), dec(m[2])); d.saved = docs.saved(dec(m[1]), dec(m[2])); return d; }],
-  [/^\/api\/symbols\/([^/]+)$/, (m) => symbols(dec(m[1]))],
-  [/^\/api\/components\/([^/]+)$/, (m) => catalog(dec(m[1]))],
-  [/^\/api\/i18n\/([^/]+)$/, (m) => i18n(dec(m[1]))],
-  [/^\/api\/wires\/([^/]+)\/([^/]+)$/, (m) => {
-    const project = dec(m[1]), cab = store.cabinet(project, dec(m[2]));
-    const box = store.box(cab.box, project);
-    const r = cabinetWires(sheets(project), cab);
-    const routes = routeWires(box, cab.components || [], r.wires);
-    return { units: r.units, unresolved: r.unresolved.length, wires: r.wires.map((w, i) => ({ ...w, route: routes[i] })) };
-  }],
-  [/^\/api\/xref\/([^/]+)$/, (m, q) => xrefOf(dec(m[1]), (q.get('key') || '').toUpperCase().replace(/\s+/g, ''))],
-  [/^\/api\/search\/([^/]+)$/, (m, q) => {
-    const s = (q.get('q') || '').toUpperCase().replace(/\s+/g, '');
-    if (s.length < 2) return [];
-    const ix = sheets(dec(m[1]));
-    return [...ix.xref.keys()].filter((k) => k.includes(s)).sort((a, b) => a.indexOf(s) - b.indexOf(s) || a.length - b.length)
-      .slice(0, 40).map((k) => ({ key: k, n: ix.xref.get(k).length }));
-  }],
+  [/^\/api\/symbols\/([^/]+)$/, (m) => ctx.symbols(dec(m[1]))],
+  [/^\/api\/components\/([^/]+)$/, (m) => ctx.catalog(dec(m[1]))],
+  [/^\/api\/i18n\/([^/]+)$/, (m) => ctx.i18nRaw(dec(m[1]))],
+  [/^\/api\/wires\/([^/]+)\/([^/]+)$/, (m) => ctx.wires(dec(m[1]), dec(m[2]))],
+  [/^\/api\/xref\/([^/]+)$/, (m, q) => ctx.xref(dec(m[1]), q.get('key'))],
+  [/^\/api\/search\/([^/]+)$/, (m, q) => ctx.search(dec(m[1]), q.get('q'))],
+  [/^\/api\/check\/([^/]+)$/, (m) => ctx.check(dec(m[1]))],
+  [/^\/api\/nets\/([^/]+)\/(.+)$/, (m, q) => ctx.nets(dec(m[1]), dec(m[2]), q.get('label'))],
 ];
 
 const WRITE = [
@@ -133,20 +89,26 @@ const WRITE = [
     const project = dec(m[1]), id = dec(m[2]);
     if (!b.doc || b.doc.id !== id || !Array.isArray(b.doc.elements)) throw new Error('bad document');
     const r = docs.put(project, id, b.doc, b.baseRev ?? null);
-    sheetIx.delete(project);
+    ctx.invalidate(project);
     return r;
   }],
-  // new blank page in a drawing folder (frame + title block copied from `like`)
+  // new blank page in a drawing folder (frame + title block copied from `like`), or a copy of `copyOf`
   ['POST', /^\/api\/page\/([^/]+)$/, async (m, b) => {
     const project = dec(m[1]);
     const drawing = String(b.drawing || 'custom').replace(/[^A-Za-z0-9 _.()-]/g, '').slice(0, 80) || 'custom';
-    const existing = sheets(project).drawings.find((d) => d.file === drawing)?.pages || [];
+    const existing = ctx.index(project).drawings.find((d) => d.file === drawing)?.pages || [];
     let k = existing.length + 1, id;
     do id = `${drawing}/s${String(k++).padStart(2, '0')}`; while (docs.has(project, id));
-    const like = b.like && docs.has(project, b.like) ? docs.get(project, b.like) : null;
-    const doc = blankDoc(id, String(b.name || 'New sheet').slice(0, 80), like);
+    let doc;
+    if (b.copyOf && docs.has(project, b.copyOf)) {
+      doc = { ...docs.get(project, b.copyOf), id, name: String(b.name || 'Copy').slice(0, 80), source: null, rev: 0 };
+      delete doc.saved;
+    } else {
+      const like = b.like && docs.has(project, b.like) ? docs.get(project, b.like) : null;
+      doc = blankDoc(id, String(b.name || 'New sheet').slice(0, 80), like);
+    }
     docs.put(project, id, doc, null);
-    sheetIx.delete(project);
+    ctx.invalidate(project);
     return { id };
   }],
   // save a selection as a new library symbol (projects/<p>/symbols/custom.json)
@@ -154,7 +116,7 @@ const WRITE = [
     const project = dec(m[1]);
     const name = String(b.name || '').trim().slice(0, 80);
     if (!name || !Array.isArray(b.paths) || !b.paths.length || !Array.isArray(b.size)) throw new Error('bad symbol');
-    const f = path.join(P(project), 'symbols', 'custom.json');
+    const f = path.join(projectDir(project), 'symbols', 'custom.json');
     const cur = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : { symbols: [] };
     let id = 'u-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
     for (let k = 2; cur.symbols.some((s) => s.id === id); k++) id = id.replace(/--\d+$/, '') + '--' + k;
@@ -169,7 +131,7 @@ const WRITE = [
     const project = dec(m[1]), id = dec(m[2]);
     if (!docs.saved(project, id)) throw new Error('only saved sheets can be deleted; imported pages stay in raw/');
     docs.remove(project, id);
-    sheetIx.delete(project);
+    ctx.invalidate(project);
     return { ok: true };
   }],
 ];
@@ -195,4 +157,26 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(port, host, () => console.log(`ecad-code on http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/`));
+const appUrl = `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/`;
+
+function openBrowser(url) {
+  const [cmd, argv, o] = process.platform === 'win32' ? ['cmd', ['/c', 'start', '""', url], { windowsVerbatimArguments: true }]
+    : [process.platform === 'darwin' ? 'open' : 'xdg-open', [url], {}];
+  spawn(cmd, argv, { ...o, detached: true, stdio: 'ignore' }).on('error', () => console.log(`open ${url} in a browser`)).unref();
+}
+
+// --open (used by ECAD.bat): open the app once listening; when ecad already runs on the port, just open it
+server.on('error', (e) => {
+  if (e.code !== 'EADDRINUSE') throw e;
+  http.get(`http://127.0.0.1:${port}/api/projects`, { timeout: 2000 }, (r) => {
+    r.resume();
+    if (r.statusCode === 200 && args.includes('--open')) { console.log(`ecad-code already running on ${appUrl}`); openBrowser(appUrl); process.exit(0); }
+    console.error(r.statusCode === 200 ? `ecad-code already running on ${appUrl}` : `port ${port} is used by another program; start with --port <number>`);
+    process.exit(1);
+  }).on('error', () => { console.error(`port ${port} is used by another program; start with --port <number>`); process.exit(1); });
+});
+
+server.listen(port, host, () => {
+  console.log(`ecad-code on ${appUrl}`);
+  if (args.includes('--open')) openBrowser(appUrl);
+});
