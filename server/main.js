@@ -82,15 +82,19 @@ const GET = [
   [/^\/api\/check\/([^/]+)$/, (m) => ctx.check(dec(m[1]))],
   [/^\/api\/nets\/([^/]+)\/(.+)$/, (m, q) => ctx.nets(dec(m[1]), dec(m[2]), q.get('label'))],
   [/^\/api\/bom\/([^/]+)$/, (m) => ctx.bom(dec(m[1]))],
+  [/^\/api\/terminals\/([^/]+)\/([^/]+)$/, (m) => ctx.terminals(dec(m[1]), dec(m[2]))],
+  [/^\/api\/labels\/([^/]+)\/([^/]+)$/, (m) => ctx.labels(dec(m[1]), dec(m[2]))],
 ];
 
-// Excel downloads: /api/export/<project>/bom.xlsx, /api/export/<project>/wires/<cabinet>.xlsx
+// downloads: /api/export/<project>/bom.xlsx | wires/<cab>.xlsx | terminals/<cab>.xlsx | labels/<cab>.csv
 const FILES = [
   [/^\/api\/export\/([^/]+)\/bom\.xlsx$/, (m) => ({ name: `${dec(m[1])} BOM.xlsx`, data: ctx.bomXlsx(dec(m[1])) })],
   [/^\/api\/export\/([^/]+)\/wires\/([^/]+)\.xlsx$/, (m) => ({ name: `${dec(m[1])} wires ${dec(m[2])}.xlsx`, data: ctx.wiresXlsx(dec(m[1]), dec(m[2])) })],
+  [/^\/api\/export\/([^/]+)\/terminals\/([^/]+)\.xlsx$/, (m) => ({ name: `${dec(m[1])} terminals ${dec(m[2])}.xlsx`, data: ctx.terminalsXlsx(dec(m[1]), dec(m[2])) })],
+  [/^\/api\/export\/([^/]+)\/labels\/([^/]+)\.csv$/, (m) => ({ name: `${dec(m[1])} labels ${dec(m[2])}.csv`, data: ctx.labelsCsv(dec(m[1]), dec(m[2])), type: 'text/csv; charset=utf-8' })],
 ];
-function sendFile(res, { name, data }) {
-  res.writeHead(200, { 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'Cache-Control': 'no-store',
+function sendFile(res, { name, data, type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }) {
+  res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store',
     'Content-Disposition': `attachment; filename="${name.replace(/[^\w .()-]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}` });
   res.end(Buffer.from(data));
 }

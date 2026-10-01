@@ -10,6 +10,7 @@ import { cabinetWires, sheetNets } from './connections.js';
 import { buildCatalog } from './components.js';
 import { runChecks, RULES } from './checks.js';
 import { buildBom, bomSheets, wireSheets } from './bom.js';
+import { terminalPlan, wireLabels, terminalSheets, labelsCsv } from './terminals.js';
 import { xlsx } from '../lib/xlsx.js';
 import { routeWires } from '../lib/route.js';
 import { buildDict, translate } from '../lib/i18n.js';
@@ -108,6 +109,13 @@ export function createProjectContext(root) {
       return (s.bom ||= buildBom({ modules: ctx.modules(project), cabinets: store.cabinets(project).map((c) => ({ id: c, ...store.cabinet(project, c) })), index: ctx.index(project), docs: ctx.savedDocs(project) }));
     },
     bomXlsx(project) { return xlsx(bomSheets(ctx.bom(project), { project }), { title: `${project} bill of materials` }); },
+    cabinetData(project, cabinet) { return { id: cabinet, ...store.cabinet(project, cabinet) }; },
+    /** terminal plan of a cabinet: strips, positions, wire numbers, bridges, what each terminal connects to */
+    terminals(project, cabinet) { return terminalPlan({ cabinet: ctx.cabinetData(project, cabinet), wires: ctx.wires(project, cabinet).wires, modules: ctx.modules(project) }); },
+    /** marking labels for every wire end of a cabinet */
+    labels(project, cabinet) { return wireLabels({ cabinet: ctx.cabinetData(project, cabinet), wires: ctx.wires(project, cabinet).wires, modules: ctx.modules(project), plan: ctx.terminals(project, cabinet) }); },
+    terminalsXlsx(project, cabinet) { return xlsx(terminalSheets(ctx.terminals(project, cabinet), { project }), { title: `${project} terminal plan ${cabinet}` }); },
+    labelsCsv(project, cabinet) { return new TextEncoder().encode(labelsCsv(ctx.labels(project, cabinet))); },
     wiresXlsx(project, cabinet) { return xlsx(wireSheets(ctx.wires(project, cabinet).wires, { project, cabinet }), { title: `${project} wire list ${cabinet}` }); },
   };
   return ctx;

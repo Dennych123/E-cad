@@ -77,8 +77,9 @@ and index exactly like the import (tested on all 27 pages).
 
 ## 4. Terminals (SKYCAD Standard)
 - [~] Terminal strip data (TB12 UP/DOWN extracted from layout)
-- [ ] Link terminal symbols to terminals, numbering, sorting, jumpers
-- [ ] Automatic terminal strip layout drawing
+- [x] Terminal plan per cabinet: wire numbers up/down per position, bridges (jumpers) between neighbours, what each terminal connects to (wire list + module cable cores); Excel and print (`Reports` menu, `tools/export.js terminals`, MCP `ecad_terminals`)
+- [ ] Link terminal symbols on the schematic to strip positions, renumber/sort terminals
+- [~] Terminal strip drawing: printable plan with bridge brackets; [ ] graphical strip symbol on a sheet
 
 ## 5. Parts, catalogue, BOM (SKYCAD Standard)
 - [~] Parts catalogue: 58 part numbers merged from modules, cabinets and the drawings, with maker, category, footprint, tags, symbols (Components tab); no prices yet
@@ -99,7 +100,7 @@ and index exactly like the import (tested on all 27 pages).
 ## 7. Wires & cables (SKYCAD Advanced)
 - [ ] Wire processing: colour, gauge (0.5mm² BLUE, 2.5mm² G/Y…), part number per wire
 - [~] From–to wire list derived from the drawings' nets (24 wires for 1CE: PLC input rungs, P24A chain, power), mark = PLC address `0000 00`; [x] Excel export per cabinet with routed lengths
-- [ ] Wire labels (marking sleeves) CSV + printable PDF
+- [x] Wire marking labels, one per wire end (wire list ends, terminal sides, cable core ends; PLC wires carry their address): print sheet with label sizes, CSV for tube/label printers (`Reports` menu, `tools/export.js labels`, MCP `ecad_labels`)
 - [~] Cable schedule: 2PB cable VCTF23NX-0.5-20-5 cores 1–20 (module data)
 - [ ] Shield management, cable list report
 

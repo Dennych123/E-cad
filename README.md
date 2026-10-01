@@ -51,7 +51,9 @@ Load estimates use `library/electrical/loads.yaml`. Each value is marked `datash
 ## Reports
 
 - **Bill of materials:** Parts tab → download button, or `node tools/export.js <project> bom`. One row per part number. The workbook also has a sheet grouped by location (cabinet or box). Quantity counts the devices listed for the part. When nothing is listed, it counts the part labels on the drawings instead. Rows marked *check* have more labels on the drawings than listed devices; confirm them before ordering.
-- **Wire list:** command palette → *Export wire list*, or `node tools/export.js <project> wires <cabinet>`. One row per wire, with from/to, line and the length routed through the ducts.
+- **Wire list:** *Reports* → *Wire list*, or `node tools/export.js <project> wires <cabinet>`. One row per wire, with from/to, line and the length routed through the ducts.
+- **Terminal plan:** *Reports* → *Terminal plan* (Excel or print). Per strip and position it shows the wire numbers on both sides, a bracket where a jumper bridges two neighbours, and what each terminal connects to.
+- **Wire labels:** *Reports* → *Wire labels*. One label per wire end; PLC wires carry their address. Print them on a sheet (pick the label size), or export a CSV for a tube or label printer.
 
 ## AI port (MCP)
 

@@ -2,6 +2,7 @@
 import { createEditor } from '/web/editor.js';
 import { createPanel3D } from '/web/panel3d.js';
 import { createFindBar } from '/web/findreplace.js';
+import { printTerminalPlan, printLabels } from '/web/reports.js';
 import { icon } from '/web/icons.js';
 import { $, esc, toast, menu, dialog, confirmDialog, prompt, command, runCommand, openPalette, shortcutsDialog, keyLabel, slideIndicator } from '/web/ui.js';
 import { buildDict, translate, hasJapanese } from '/lib/i18n.js';
@@ -61,7 +62,7 @@ function renderToolbar() {
     const s = panel3d.state;
     tb.innerHTML = `<div class="group"><select id="boxSel" aria-label="Box template" style="width:260px">${panel3d.boxes.map((b) => `<option value="${esc(b.id)}" ${b.id === panel3d.boxId ? 'selected' : ''}>${esc(b.id)} — ${esc(b.name)}</option>`).join('')}</select>
       <select id="cabSel" aria-label="Cabinet" style="width:140px"><option value="">No cabinet</option>${panel3d.cabinets.map((c) => `<option ${c === panel3d.cabinetId ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div><span class="sep"></span>
-      ${T('door', 'door', s.door ? 'Close door' : 'Open door', 'O', s.door)}${T('xray', 'xray', 'X-ray', 'X', s.xray)}${T('labels', 'tag', 'Labels', 'L', s.labelsOn)}${T('wires3d', 'cable', 'Wires', 'W', s.wiresOn)}<span class="sep"></span>${T('fit3d', 'fit', 'Fit view', 'Home')}`;
+      ${T('door', 'door', s.door ? 'Close door' : 'Open door', 'O', s.door)}${T('xray', 'xray', 'X-ray', 'X', s.xray)}${T('labels', 'tag', 'Labels', 'L', s.labelsOn)}${T('wires3d', 'cable', 'Wires', 'W', s.wiresOn)}<span class="sep"></span>${T('fit3d', 'fit', 'Fit view', 'Home')}<span class="spacer" style="flex:1"></span>${T('reports', 'report', 'Reports: BOM, wire list, terminals, labels')}`;
     $('#boxSel').onchange = () => { const b = $('#boxSel').value; panel3d.load(b, panel3d.cabinets.includes(b) ? b : $('#cabSel').value); setTimeout(renderToolbar, 400); };
     $('#cabSel').onchange = () => panel3d.load($('#boxSel').value, $('#cabSel').value, false);
     return;
@@ -75,7 +76,7 @@ function renderToolbar() {
     <span class="sep"></span><div class="group">${T('snap', 'magnet', 'Snap', 'S', editor.snap)}${T('grid', 'grid', 'Grid', 'G', editor.grid)}${T('bg', 'layers', 'Title block', '', editor.background)}</div>
     <span class="spacer" style="flex:1"></span>
     <div class="group">${T('zoomOut', 'zoomOut', 'Zoom out', keyLabel('mod+-'))}<span class="zoom-read" id="zoomRead" data-tip="Zoom — click for presets">${editor.zoomPct()}%</span>${T('zoomIn', 'zoomIn', 'Zoom in', keyLabel('mod+='))}${T('fit', 'fit', 'Fit sheet', keyLabel('mod+0'))}</div><span class="sep"></span>
-    <div class="group">${T('export', 'download', 'Export SVG', '', false, !has)}${T('print', 'print', 'Print / PDF', keyLabel('mod+p'), false, !has)}<button class="btn primary" data-cmd="save" data-tip="Save" data-keys="${keyLabel('mod+s')}" ${!has ? 'disabled' : ''}>${icon('save')}Save</button></div>`;
+    <div class="group">${T('reports', 'report', 'Reports: BOM, wire list, terminals, labels')}${T('export', 'download', 'Export SVG', '', false, !has)}${T('print', 'print', 'Print / PDF', keyLabel('mod+p'), false, !has)}<button class="btn primary" data-cmd="save" data-tip="Save" data-keys="${keyLabel('mod+s')}" ${!has ? 'disabled' : ''}>${icon('save')}Save</button></div>`;
   $('#zoomRead').onclick = (e) => menu([50, 100, 150, 200, 400].map((p) => ({ label: p + '%', run: () => { editor.zoomToPct(p); renderZoom(); } })).concat(['-', { label: 'Fit sheet', icon: 'fit', run: () => { editor.fit(); renderZoom(); } }]), { anchor: e.currentTarget });
 }
 $('#toolbar').addEventListener('click', (e) => { const b = e.target.closest('[data-cmd]'); if (b && !b.disabled) { runCommand(b.dataset.cmd); renderToolbar(); } });
@@ -657,13 +658,33 @@ command({ id: 'exportBom', title: 'Export bill of materials (Excel)', group: 'Re
   download(`/api/export/${encodeURIComponent(project())}/bom.xlsx`);
   toast('Bill of materials exported — rows marked "check" need a look before ordering', { kind: 'ok', duration: 3200 });
 } });
-command({ id: 'exportWires', title: 'Export wire list (Excel)…', group: 'Reports', icon: 'cable', when: () => !!project(), run: async () => {
+/** cabinet reports: ask which cabinet when there is more than one (menu at the Reports button) */
+async function pickCabinet(what, go) {
   const cabs = await api('/api/cabinets/' + encodeURIComponent(project())).catch(() => []);
-  if (!cabs.length) { toast('No cabinet in this project yet — the wire list is made per cabinet', { kind: 'info' }); return; }
-  const go = (c) => { download(`/api/export/${encodeURIComponent(project())}/wires/${encodeURIComponent(c)}.xlsx`); toast(`Wire list of ${c} exported`, { kind: 'ok', duration: 1800 }); };
+  if (!cabs.length) { toast(`No cabinet in this project yet — the ${what} is made per cabinet`, { kind: 'info' }); return; }
   if (cabs.length === 1) return go(cabs[0]);
-  const r = $('#paletteBtn').getBoundingClientRect();
-  menu(cabs.map((c) => ({ label: `Cabinet ${c}`, icon: 'box3d', run: () => go(c) })), { x: r.left - 120, y: r.bottom + 6 });
+  const a = document.querySelector('#toolbar [data-cmd=reports]') || $('#paletteBtn');
+  menu(cabs.map((c) => ({ label: `Cabinet ${c}`, icon: 'box3d', run: () => go(c) })), { anchor: a });
+}
+const P = () => encodeURIComponent(project());
+command({ id: 'exportWires', title: 'Export wire list (Excel)…', group: 'Reports', icon: 'cable', when: () => !!project(), run: () => pickCabinet('wire list', (c) => { download(`/api/export/${P()}/wires/${encodeURIComponent(c)}.xlsx`); toast(`Wire list of ${c} exported`, { kind: 'ok', duration: 1800 }); }) });
+command({ id: 'exportTerminals', title: 'Export terminal plan (Excel)…', group: 'Reports', icon: 'download', when: () => !!project(), run: () => pickCabinet('terminal plan', (c) => { download(`/api/export/${P()}/terminals/${encodeURIComponent(c)}.xlsx`); toast(`Terminal plan of ${c} exported`, { kind: 'ok', duration: 1800 }); }) });
+command({ id: 'printTerminals', title: 'Print terminal plan…', group: 'Reports', icon: 'print', when: () => !!project(), run: () => pickCabinet('terminal plan', async (c) => printTerminalPlan(await api(`/api/terminals/${P()}/${encodeURIComponent(c)}`), { project: project(), toast })) });
+command({ id: 'printLabels', title: 'Print wire labels…', group: 'Reports', icon: 'tag', when: () => !!project(), run: () => pickCabinet('label list', async (c) => printLabels(await api(`/api/labels/${P()}/${encodeURIComponent(c)}`), { project: project(), toast })) });
+command({ id: 'exportLabels', title: 'Export wire labels (CSV for label printers)…', group: 'Reports', icon: 'download', when: () => !!project(), run: () => pickCabinet('label list', (c) => { download(`/api/export/${P()}/labels/${encodeURIComponent(c)}.csv`); toast(`Labels of ${c} exported`, { kind: 'ok', duration: 1800 }); }) });
+command({ id: 'reports', title: 'Reports…', group: 'Reports', icon: 'report', when: () => !!project(), run: () => {
+  const a = document.querySelector('#toolbar [data-cmd=reports]');
+  const r = (id) => () => runCommand(id);
+  menu([
+    { label: 'Bill of materials (Excel)', icon: 'download', run: r('exportBom') },
+    '-',
+    { label: 'Wire list (Excel)…', icon: 'cable', run: r('exportWires') },
+    { label: 'Terminal plan (Excel)…', icon: 'download', run: r('exportTerminals') },
+    { label: 'Terminal plan (print)…', icon: 'print', run: r('printTerminals') },
+    '-',
+    { label: 'Wire labels (print)…', icon: 'tag', run: r('printLabels') },
+    { label: 'Wire labels (CSV)…', icon: 'download', run: r('exportLabels') },
+  ], a ? { anchor: a } : { x: innerWidth / 2, y: 80 });
 } });
 command({ id: 'runCheck', title: 'Run electrical check', group: 'Check', icon: 'shield', keys: 'F7', when: () => !!project(), run: async () => { if (state.mode !== '2d') await setMode('2d'); if (!leftOpen) runCommand('toggleLeft'); if (state.leftTab !== 'checks') setLeftTab('checks'); await runCheck(); } });
 command({ id: 'checks', title: 'Show electrical check results', group: 'Check', icon: 'shield', when: () => !!project(), run: async () => { if (state.mode !== '2d') await setMode('2d'); if (!leftOpen) runCommand('toggleLeft'); setLeftTab('checks'); } });

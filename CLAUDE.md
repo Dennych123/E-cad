@@ -52,7 +52,7 @@ npm install
 npm start                      # http://127.0.0.1:7670/  ?project=&mode=2d|3d&sheet=&key=&box=&cabinet=&door=90&xray=1
 npm test                       # node tests/run.js: unit, JS<->Python parity, real-browser clicks (Edge/Chrome over CDP)
 node tools/check.js <project> [--json] [--fail-on error|warning]   # electrical check; exit 1 on findings (CI)
-node tools/export.js <project> bom | wires <cabinet> [--out f.xlsx] [--json]   # reports (default projects/<p>/out/)
+node tools/export.js <project> bom | wires|terminals|labels <cabinet> [--out f] [--json]   # reports (default projects/<p>/out/)
 node server/mcp.js             # MCP server (AI port), registered for Claude Code by .mcp.json
 node tools/step2glb.js <maker.stp> --part <P/N> --front -y --up +z    # maker STEP -> GLB at real size
 node tools/extract-symbols.js <project>     # symbol library from the imported drawings (+ symbols/names.yaml curation)
@@ -75,6 +75,10 @@ node tools/make-icon.js        # web/ecad.ico from the app mark (desktop shortcu
   cables); labels on the drawings count only when nothing is listed; more labels than devices = "check".
   Tags found next to labels are shown for orientation and never change a quantity.
 - `lib/xlsx.js` writes .xlsx with no dependency (stored ZIP); tests read it back with openpyxl when present.
+- Terminal plan / labels (`server/terminals.js`): strip positions come from the cabinet's `terminal_strips`;
+  the wire list does not know the side, so connections are listed per terminal; a cable core lands on the
+  first terminal carrying its wire. Labels: 2 per wire-list wire, 1 per wired terminal side not already an end
+  of a listed wire, 2 per cable core. Wire numbers: address > supply label > the strip's wire number > label.
 
 ## Electrical check (server/checks.js) and the AI port (server/mcp.js)
 - Rules are data: `RULES` = `{ id, title, severity, help }`; `runChecks()` returns `summary`, a `checklist`

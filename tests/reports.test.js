@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { xlsx, crc32, colName, zipStore, unzipStore } from '../lib/xlsx.js';
 import { buildBom } from '../server/bom.js';
 import { partsOfText } from '../server/components.js';
+import { terminalPlan, wireLabels, labelsCsv } from '../server/terminals.js';
 import { createProjectContext } from '../server/project.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -77,6 +78,25 @@ export default function (t) {
     t.eq(bom.get('AH165-TGFW11').qty, 3, 'module device + tagged symbol + untagged symbol');
     t.eq([bom.get('CP-1P-TBD').category, bom.get('CP-1P-TBD').basis], ['To be decided', 'part number to be decided']);
     for (const r of bom.values()) t.eq(r.locations.reduce((a, l) => a + l.n, 0), r.qty, `locations add up for ${r.part}`);
+  });
+
+  t('terminal plan: wires per side, bridges, what each terminal connects to; a cable core lands once', () => {
+    const cabinet = { id: 'C1', terminal_strips: { TB1: { part: 'BN-X', terminals: [
+      { pos: 1, up: 'P24A', down: 'P24A' }, { pos: 2, up: 'P24A', down: 'P24A' }, { pos: 3, up: 'X1', down: 'X2' }, { pos: 5, up: 'X1', down: 'X1' },
+    ] } } };
+    const wires = [{ no: 'P24A', from: { tag: 'TB1', pin: '1' }, to: { tag: 'CP1', pin: null }, line: 'L1' }, { no: 'X1', from: { tag: 'TB1', pin: '3' }, to: { tag: 'IN1', pin: '000' } }];
+    const modules = [{ id: 'm', cables: [{ tag: 'W1', from: 'PB', to: 'C1', cores: [{ core: 1, wire: 'X2' }, { core: 2, wire: 'P24A' }] }] }];
+    const [s] = terminalPlan({ cabinet, wires, modules }).strips;
+    t.eq(s.terminals.map((x) => [x.pos, x.bridgeUp, x.bridgeDown]), [[1, true, true], [2, false, false], [3, false, false], [5, false, false]], 'pos 3 -> 5 is not adjacent');
+    t.eq(s.terminals[0].links.map((l) => `${l.wire}>${l.to}`), ['P24A>CP1', 'P24A>W1 core 2 (PB → C1)']);
+    t.eq(s.terminals[1].links, [], 'the cable core is not repeated on the bridged neighbour');
+    t.eq(s.terminals[2].links.map((l) => `${l.wire}>${l.to}`), ['X1>IN1:000', 'X2>W1 core 1 (PB → C1)']);
+    const L = wireLabels({ cabinet, wires, modules });
+    const n = (src) => L.labels.filter((l) => l.source.startsWith(src)).length;
+    t.eq(n('wire list'), 4, 'two ends per wire');
+    t.eq(n('terminal strip'), 8 - 2, 'every wired side, minus the two the wire list already ends on');
+    t.eq(n('cable'), 4, 'two ends per core');
+    t.ok(labelsCsv(L).startsWith('﻿Mark;Position;Wire;Source\r\n"P24A";'), 'CSV with BOM and header');
   });
 
   t('bom of the example project: locations add up, Excel export opens', () => {

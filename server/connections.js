@@ -53,7 +53,7 @@ export function cabinetWires(ix, cabinet) {
     const ends = [];
     const add = (tag, pin, why) => { if (comps.has(tag) && !ends.some((e) => e.tag === tag && e.pin === pin)) ends.push({ tag, pin, why }); };
     for (const d of n.devices) add(d.toUpperCase(), null, 'device');
-    const wireNos = [];
+    const wireNos = [], stripNos = [];
     for (const k of n.keys) {
       const m = ADDR_RE.exec(k);
       if (m) { const u = units.get(Number(m[1])); if (u) add(u, m[2], 'address ' + k); continue; }
@@ -61,7 +61,7 @@ export function cabinetWires(ix, cabinet) {
       let onStrip = false;
       for (const [strip, st] of Object.entries(strips)) {
         const pos = (st.terminals || []).find((t) => t.up === k || t.down === k);
-        if (pos) { add(strip.toUpperCase(), String(pos.pos), 'terminal ' + k); onStrip = true; break; }
+        if (pos) { add(strip.toUpperCase(), String(pos.pos), 'terminal ' + k); onStrip = true; stripNos.push(k); break; }
       }
       if (!onStrip || /^[PZ]\d/.test(k)) wireNos.push(k);
     }
@@ -79,7 +79,8 @@ export function cabinetWires(ix, cabinet) {
     }
     // Denso mark tube on PLC wires is the address, "XXXX XX" = word + bit (remark box on the IO sheets)
     const addr = n.keys.map((k) => ADDR_RE.exec(k)).find(Boolean);
-    const no = addr ? `00${addr[1]} ${addr[2].slice(1)}` : wireNos.find((k) => /^[PZ]\d/.test(k)) || wireNos[0] || n.line || null;
+    // otherwise the supply label, else the wire number the terminal plan uses, else any label on the net
+    const no = addr ? `00${addr[1]} ${addr[2].slice(1)}` : wireNos.find((k) => /^[PZ]\d/.test(k)) || stripNos[0] || wireNos[0] || n.line || null;
     for (let i = 1; i < chain.length; i++) {
       wires.push({ id: `${n.page}#${n.net}#${i}`, no, from: chain[i - 1], to: chain[i], page: n.page, line: n.line, keys: n.keys });
     }
