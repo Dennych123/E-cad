@@ -1,10 +1,11 @@
 // App shell: project, workspace modes, sheet tree, symbol/component library, inspector, commands.
 import { createEditor } from '/web/editor.js';
 import { createPanel3D } from '/web/panel3d.js';
+import { createFindBar } from '/web/findreplace.js';
 import { icon } from '/web/icons.js';
 import { $, esc, toast, menu, dialog, confirmDialog, prompt, command, runCommand, openPalette, shortcutsDialog, keyLabel, slideIndicator } from '/web/ui.js';
 import { buildDict, translate, hasJapanese } from '/lib/i18n.js';
-import { PT, elementBox } from '/lib/sheetdoc.js';
+import { PT, elementBox, STYLE_KEYS } from '/lib/sheetdoc.js';
 
 const api = async (p, opt) => { const r = await fetch(p, opt); const j = await r.json(); if (!r.ok) throw Object.assign(new Error(j.error || r.status), { status: r.status }); return j; };
 const store = { get: (k, d) => { try { return localStorage.getItem('ecad.' + k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem('ecad.' + k, v); } catch { /* private */ } } };
@@ -36,13 +37,15 @@ renderLang();
 const stage2d = $('#stage2d'), stage3d = $('#stage3d');
 const editor = createEditor(stage2d, {
   api, project, toast,
-  onChange: (c) => { state.change = c; $('#dirtyDot').hidden = !c.dirty; renderSave(c); renderToolbar(); },
+  onChange: (c) => { state.change = c; $('#dirtyDot').hidden = !c.dirty; renderSave(c); renderToolbar(); findBar?.refresh(); },
   onSelect: (s) => { state.selection = s; renderInspector(); renderStatusSel(s); },
   onCursor: (p) => { $('#stCursor').textContent = `x ${p.x.toFixed(1).padStart(6)}  y ${p.y.toFixed(1).padStart(6)} mm`; },
   onNet: (n) => { state.net = n; renderInspector(); },
   onTool: () => { renderToolbar(); renderStatusTool(); renderLibrary(); },
   onNavigate: ({ line }) => gotoLine(line),
+  onView: () => renderZoom(),                       // any zoom/pan: wheel, fit, jumps from the xref or the checks
 });
+const findBar = createFindBar(stage2d, { editor, toast });
 const panel3d = createPanel3D({ stage: stage3d, inspector: $('#inspector'), api, project, toast, onShowInDrawings: async ({ key, page, line }) => {
   await setMode('2d');
   if (key) return showXref(key.toUpperCase().replace(/\s+/g, ''), { jump: true });
@@ -77,7 +80,6 @@ function renderToolbar() {
 }
 $('#toolbar').addEventListener('click', (e) => { const b = e.target.closest('[data-cmd]'); if (b && !b.disabled) { runCommand(b.dataset.cmd); renderToolbar(); } });
 const renderZoom = () => { const z = $('#zoomRead'); if (z) z.textContent = editor.zoomPct() + '%'; $('#stZoom').innerHTML = `${icon('zoomIn')}<span class="mono">${editor.zoomPct()}%</span>`; };
-stage2d.addEventListener('wheel', () => requestAnimationFrame(renderZoom), { passive: true });
 
 // ======================================================================== status bar
 const TOOL_NAMES = { select: 'Select', pan: 'Pan', wire: 'Wire — click points, double-click or Enter to finish, Shift = free angle', line: 'Line', rect: 'Rectangle — drag', ellipse: 'Ellipse — drag', text: 'Text — click to type', place: 'Place — click to drop, R rotates, Esc stops' };
@@ -127,8 +129,10 @@ function renderLeft() {
     tools.innerHTML = `<input type="search" placeholder="Filter sheets" id="leftFilter" value="${esc(state.filter)}" aria-label="Filter sheets"><button class="ibtn" data-act="newSheet" data-tip="New sheet">${icon('plus')}</button>`;
   } else if (state.leftTab === 'checks') {
     tools.innerHTML = `<input type="search" placeholder="Filter findings" id="leftFilter" value="${esc(state.filter)}" aria-label="Filter findings"><button class="ibtn" data-act="runCheck" data-tip="Check again" data-keys="F7" aria-label="Check again">${icon('refresh')}</button>`;
+  } else if (state.leftTab === 'components') {
+    tools.innerHTML = `<input type="search" placeholder="Search part no., maker, tag" id="leftFilter" value="${esc(state.filter)}" aria-label="Filter parts"><button class="ibtn" data-act="exportBom" data-tip="Bill of materials (Excel)" aria-label="Export bill of materials">${icon('download')}</button>`;
   } else {
-    tools.innerHTML = `<input type="search" placeholder="${state.leftTab === 'symbols' ? 'Search symbols' : 'Search part no., maker, tag'}" id="leftFilter" value="${esc(state.filter)}" aria-label="Filter">`;
+    tools.innerHTML = `<input type="search" placeholder="Search symbols" id="leftFilter" value="${esc(state.filter)}" aria-label="Filter symbols">`;
   }
   $('#leftFilter').oninput = (e) => { state.filter = e.target.value; renderLeftBody(); };
   renderLeftBody();
@@ -140,6 +144,7 @@ $('#leftTools').addEventListener('click', (e) => {
   const a = e.target.closest('[data-act]');
   if (a?.dataset.act === 'newSheet') runCommand('newSheet');
   if (a?.dataset.act === 'runCheck') runCheck();
+  if (a?.dataset.act === 'exportBom') runCommand('exportBom');
 });
 
 function renderTree() {
@@ -188,6 +193,21 @@ $('#leftBody').addEventListener('click', async (e) => {
   if (place) { const sym = state.symbols.find((x) => x.id === place.dataset.place); if (sym) { editor.startPlace(sym, { tag: place.dataset.tag || null }); toast(`Placing ${sym.name}${place.dataset.tag ? ' as ' + place.dataset.tag : ''} — click on the sheet`, { kind: 'info', duration: 2200 }); } return; }
   const k = e.target.closest('[data-key]');
   if (k) return showXref(k.dataset.key, { jump: true });
+});
+// right-click a sheet in the tree: the sheet commands, run on that sheet (it opens first)
+$('#leftBody').addEventListener('contextmenu', (e) => {
+  const a = e.target.closest('[data-p]');
+  if (!a) return;
+  e.preventDefault();
+  const id = a.dataset.p, page = pageOf(id)?.p;
+  const on = (cmd) => async () => { if (await openSheet(id)) runCommand(cmd); };
+  menu([
+    { label: 'Open', icon: 'sheet', run: () => openSheet(id) },
+    { label: 'Duplicate…', icon: 'copy', run: on('duplicateSheet') },
+    { label: 'Rename…', icon: 'text', run: on('rename') },
+    '-',
+    { label: 'Delete…', icon: 'trash', danger: true, disabled: page?.source !== 'new', run: on('deleteSheet') },   // imported sheets stay
+  ], { x: e.clientX, y: e.clientY });
 });
 $('#leftBody').addEventListener('dragstart', (e) => { const s = e.target.closest('[data-sym]'); if (s) { e.dataTransfer.setData('text/x-ecad-symbol', s.dataset.sym); e.dataTransfer.effectAllowed = 'copy'; } });
 stage2d.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('text/x-ecad-symbol')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
@@ -328,11 +348,15 @@ function renderInspector() {
   if (!list.length) {
     const ix = editor.index;
     html += `<div class="section"><h4>Sheet</h4><div class="kv"><span>Name</span><span>${esc(tr(doc.name))}</span><span>Size</span><span class="mono">${num(doc.widthMm)} × ${num(doc.heightMm)} mm</span><span>Shapes</span><span>${doc.elements.length}</span><span>State</span><span>${editor.dirty ? 'Unsaved changes' : doc.saved ? 'Saved' : 'Imported, not saved yet'}</span>${ix ? `<span>Lines</span><span>${ix.rows.length ? `${esc(ix.rows[0].label)} … ${esc(ix.rows.at(-1).label)}` : '—'}</span>` : ''}</div>
-      <div class="row" style="margin-top:12px"><button class="btn solid" data-act="rename">${icon('text')}Rename</button>${doc.saved && doc.source === null ? `<button class="btn solid danger" data-act="deleteSheet">${icon('trash')}Delete</button>` : ''}</div></div>
+      <div class="row" style="margin-top:12px"><button class="btn solid" data-act="rename">${icon('text')}Rename</button><button class="btn solid" data-cmd="duplicateSheet">${icon('copy')}Duplicate</button>${doc.saved && doc.source === null ? `<button class="btn solid danger" data-act="deleteSheet">${icon('trash')}Delete</button>` : ''}</div></div>
       <div class="section"><h4>Tips</h4><div class="faint" style="line-height:1.6">Click a shape to see its cross-reference and net. Double-click text to edit it, or an L-number arrow to jump to that line. Drag symbols in from the Symbols tab. <kbd>${keyLabel('mod+k')}</kbd> lists every command.</div></div>`;
   } else if (list.length > 1) {
-    html += `<div class="section"><h4>Selection <span class="count">${list.length}</span></h4><div class="row" style="flex-wrap:wrap">${['left', 'center', 'right', 'top', 'middle', 'bottom'].map((k) => `<button class="ibtn" data-cmd="align.${k}" data-tip="Align ${k}">${icon('align' + { left: 'L', center: 'C', right: 'R', top: 'T', middle: 'M', bottom: 'B' }[k])}</button>`).join('')}</div>
-      <div class="faint" style="margin-top:8px">${Object.entries(list.reduce((a, e) => ((a[e.kind] = (a[e.kind] || 0) + 1), a), {})).map(([k, n]) => `${n} ${k}`).join(' · ')}</div></div>`;
+    const g = editor.selectionGroup();
+    html += `<div class="section"><h4>${g != null ? 'Group' : 'Selection'} <span class="count">${list.length}</span></h4><div class="row" style="flex-wrap:wrap">${['left', 'center', 'right', 'top', 'middle', 'bottom'].map((k) => `<button class="ibtn" data-cmd="align.${k}" data-tip="Align ${k}">${icon('align' + { left: 'L', center: 'C', right: 'R', top: 'T', middle: 'M', bottom: 'B' }[k])}</button>`).join('')}</div>
+      <div class="faint" style="margin-top:8px">${Object.entries(list.reduce((a, e) => ((a[e.kind] = (a[e.kind] || 0) + 1), a), {})).map(([k, n]) => `${n} ${k}`).join(' · ')}</div>
+      <div class="row" style="margin-top:10px">${g != null ? `<button class="btn solid" data-cmd="ungroup">${icon('ungroup')}Ungroup</button>` : `<button class="btn solid" data-cmd="group">${icon('group')}Group</button>`}</div></div>`;
+    const fmt = styleRows(list);
+    if (fmt) html += `<div class="section"><h4>Format</h4><div class="kv">${fmt}</div></div>`;
   } else {
     html += propsOf(list[0], doc);
   }
@@ -351,13 +375,35 @@ function propsOf(e, doc) {
   const K = { visio: 'Imported shape', wire: 'Wire', line: 'Line', rect: 'Rectangle', ellipse: 'Ellipse', text: 'Text', symbol: 'Symbol' };
   let rows = '';
   if (e.kind === 'symbol') rows = `<span>Symbol</span><span>${esc(e.name)}</span><span>Tag</span><span><input class="mono" type="text" value="${esc(e.tag || '')}" data-prop="tag" aria-label="Tag"></span><span>Part no.</span><span><input class="mono" type="text" list="partList" value="${esc(e.part || '')}" data-prop="part" aria-label="Part number" placeholder="from the catalogue"></span><span>Rotation</span><span><select data-prop="rot" aria-label="Rotation">${[0, 90, 180, 270].map((r) => `<option ${r === (e.rot || 0) ? 'selected' : ''} value="${r}">${r}°</option>`).join('')}</select></span>${pos}${size}<span>Pins</span><span>${e.pins?.length || 0}</span>`;
-  else if (e.kind === 'text') rows = `<span>Text</span><span><textarea data-prop="text" rows="${Math.min(6, e.text.split('\n').length + 1)}" aria-label="Text">${esc(e.text)}</textarea></span><span>Size</span><span><input class="mono" type="number" min="3" max="72" step="0.5" value="${e.size}" data-prop="size" aria-label="Font size" style="width:84px"> pt</span>${pos}`;
-  else if (e.kind === 'wire' || e.kind === 'line') { let L = 0; for (let i = 1; i < e.pts.length; i++) L += Math.hypot(e.pts[i][0] - e.pts[i - 1][0], e.pts[i][1] - e.pts[i - 1][1]); rows = `<span>Points</span><span>${e.pts.length}</span><span>Length</span><span class="mono">${num(L / PT)} mm</span><span>Weight</span><span><input class="mono" type="number" min="0.1" max="5" step="0.1" value="${e.width ?? 0.72}" data-prop="width" aria-label="Line weight" style="width:84px"> pt</span>${pos}`; }
+  else if (e.kind === 'text') rows = `<span>Text</span><span><textarea data-prop="text" rows="${Math.min(6, e.text.split('\n').length + 1)}" aria-label="Text">${esc(e.text)}</textarea></span>${pos}`;
+  else if (e.kind === 'wire' || e.kind === 'line') { let L = 0; for (let i = 1; i < e.pts.length; i++) L += Math.hypot(e.pts[i][0] - e.pts[i - 1][0], e.pts[i][1] - e.pts[i - 1][1]); rows = `<span>Points</span><span>${e.pts.length}</span><span>Length</span><span class="mono">${num(L / PT)} mm</span>${pos}`; }
   else if (e.kind === 'visio') {
     const texts = (e.shapes || []).filter((x) => x.text).map((x) => x.text);
     rows = `<span>Master</span><span>${esc(e.master ? tr(e.master.replace(/\.\d+$/, '')) : '—')}</span>${texts.length ? `<span>Text</span><span>${texts.slice(0, 4).map((t) => `<div class="mono" style="white-space:pre-wrap">${esc(tr(t))}</div>`).join('')}</span>` : ''}${pos}${size}`;
-  } else rows = `${pos}${size}<span>Weight</span><span><input class="mono" type="number" min="0.1" max="5" step="0.1" value="${e.width ?? 0.72}" data-prop="width" aria-label="Line weight" style="width:84px"> pt</span>`;
-  return `<div class="section"><h4>${esc(K[e.kind] || e.kind)} <span class="count mono">#${e.id}</span></h4><div class="kv">${rows}</div></div>`;
+  } else rows = `${pos}<span>Size</span><span class="row"><input class="mono" type="number" min="0.5" step="0.5" value="${num(bw / PT)}" data-prop="w" aria-label="Width mm" style="width:84px"><input class="mono" type="number" min="0.5" step="0.5" value="${num(bh / PT)}" data-prop="h" aria-label="Height mm" style="width:84px"></span>`;
+  const fmt = styleRows([e]);
+  return `<div class="section"><h4>${esc(K[e.kind] || e.kind)} <span class="count mono">#${e.id}</span>${e.group != null ? '<span class="count">· in a group</span>' : ''}</h4><div class="kv">${rows}</div></div>${fmt ? `<div class="section"><h4>Format</h4><div class="kv">${fmt}</div></div>` : ''}`;
+}
+// ---- format rows (one shape or many: a mixed value shows empty, a change applies to all)
+const hex = (c) => { const s = String(c || ''); if (/^#[0-9a-f]{6}$/i.test(s)) return s.toLowerCase(); if (/^#[0-9a-f]{3}$/i.test(s)) return '#' + [...s.slice(1)].map((ch) => ch + ch).join('').toLowerCase(); return s === 'white' ? '#ffffff' : '#000000'; };
+const DASH_NAMES = { solid: 'Solid', dash: 'Dashed', dot: 'Dotted', dashdot: 'Dash-dot', long: 'Long dash' };
+const FONT_NAMES = { mono: 'Plex Mono', sans: 'Plex Sans', gothic: 'MS Gothic' };
+function styleRows(list) {
+  const has = (k) => list.every((e) => (STYLE_KEYS[e.kind] || []).includes(k));
+  const val = (k, d) => { const v = [...new Set(list.map((e) => e[k] ?? d))]; return v.length === 1 ? v[0] : undefined; };
+  const sel = (k, names, d) => { const v = val(k, d); return `<select data-style="${k}" aria-label="${k}">${v === undefined ? '<option selected disabled>Mixed</option>' : ''}${Object.entries(names).map(([id, label]) => `<option value="${id}" ${id === v ? 'selected' : ''}>${label}</option>`).join('')}</select>`; };
+  let r = '';
+  if (has('stroke')) r += `<span>Colour</span><span class="row"><input type="color" data-style="stroke" value="${hex(val('stroke', '#000000'))}" aria-label="Line colour"></span>`;
+  if (has('width')) r += `<span>Weight</span><span><input class="mono" type="number" min="0.1" max="5" step="0.1" value="${val('width', 0.72) ?? ''}" placeholder="mixed" data-style="width" aria-label="Line weight" style="width:84px"> pt</span>`;
+  if (has('dash')) r += `<span>Pattern</span><span>${sel('dash', DASH_NAMES, 'solid')}</span>`;
+  if (has('arrows')) r += `<span>Arrows</span><span>${sel('arrows', { none: 'None', start: 'At start', end: 'At end', both: 'Both ends' }, 'none')}</span>`;
+  if (has('fill')) { const f = val('fill', null); r += `<span>Fill</span><span class="row"><label class="row" style="gap:4px"><input type="checkbox" data-style="fillOn" ${f ? 'checked' : ''} aria-label="Fill"></label><input type="color" data-style="fill" value="${hex(f || '#ffffff')}" aria-label="Fill colour" ${f ? '' : 'disabled'}></span>`; }
+  if (has('color')) r += `<span>Colour</span><span><input type="color" data-style="color" value="${hex(val('color', '#000000'))}" aria-label="Text colour"></span>`;
+  if (has('size')) r += `<span>Size</span><span><input class="mono" type="number" min="3" max="72" step="0.5" value="${val('size', 9) ?? ''}" placeholder="mixed" data-style="size" aria-label="Font size" style="width:84px"> pt</span>`;
+  if (has('font')) r += `<span>Font</span><span>${sel('font', FONT_NAMES, 'mono')}</span>`;
+  if (has('anchor')) r += `<span>Align</span><span>${sel('anchor', { start: 'Left', middle: 'Centre', end: 'Right' }, 'start')}</span>`;
+  if (has('bold')) r += `<span>Bold</span><span><input type="checkbox" data-style="bold" ${val('bold', false) ? 'checked' : ''} aria-label="Bold"></span>`;
+  return r;
 }
 function xrefHtml(x) {
   const occ = x.occurrences || [];
@@ -369,7 +415,19 @@ function xrefHtml(x) {
     ${x.cabinet?.length ? `<div style="margin-top:10px">${x.cabinet.map((c, i) => `<button class="btn solid" data-cab="${i}">${icon('box3d')}Show in 3D · ${esc(c.cabinet)}</button>`).join('')}</div>` : ''}</div>`;
 }
 $('#inspector').addEventListener('change', (e) => {
-  const p = e.target.dataset.prop; if (!p || state.mode !== '2d') return;
+  if (state.mode !== '2d') return;
+  const st = e.target.dataset.style;
+  if (st) {
+    const t = e.target;
+    const DEFAULTS = { dash: 'solid', arrows: 'none', anchor: 'start', font: 'mono' };
+    if (st === 'fillOn') { editor.restyle({ fill: t.checked ? ($('#inspector [data-style=fill]')?.value || '#ffffff') : null }, t.checked ? 'Fill' : 'No fill'); return; }
+    let v = t.type === 'checkbox' ? (t.checked || null) : t.value;
+    if (st === 'width' || st === 'size') { v = Number(v); if (!(v > 0)) return; }
+    if (DEFAULTS[st] === v) v = null;                         // defaults are not stored
+    editor.restyle({ [st]: v }, { stroke: 'Line colour', color: 'Text colour', fill: 'Fill colour', width: 'Line weight', dash: 'Line pattern', arrows: 'Arrows', size: 'Font size', font: 'Font', anchor: 'Align text', bold: 'Bold' }[st] || 'Format');
+    return;
+  }
+  const p = e.target.dataset.prop; if (!p) return;
   const [el] = editor.selection; if (!el) return;
   const v = e.target.value, doc = editor.doc;
   if (p === 'x' || p === 'y') {
@@ -377,11 +435,15 @@ $('#inspector').addEventListener('change', (e) => {
     const want = Number(v) * PT;
     const dx = p === 'x' ? want - bx : 0, dy = p === 'y' ? (doc.height - want - bh) - by : 0;
     editor.select([el.id]); editor.nudge(+dx.toFixed(2), +dy.toFixed(2));
+  } else if (p === 'w' || p === 'h') {
+    const [bx, by, bw, bh] = elementBox(el, doc), want = Number(v) * PT;
+    if (!(want > 0)) return;
+    // the box grows from its top-left corner
+    editor.reshape(el.id, [bx, by, p === 'w' ? want : bw, p === 'h' ? want : bh]);
   } else if (p === 'rot') editor.update(el.id, { rot: Number(v) }, 'Rotate');
   else if (p === 'tag') editor.update(el.id, { tag: v.trim() }, 'Edit tag');
   else if (p === 'part') editor.update(el.id, { part: v.trim().toUpperCase() || undefined }, 'Set part number');
   else if (p === 'text') editor.update(el.id, { text: v }, 'Edit text');
-  else if (p === 'size' || p === 'width') editor.update(el.id, { [p]: Number(v) }, 'Edit ' + p);
 });
 $('#inspector').addEventListener('click', async (e) => {
   if (state.mode !== '2d') return;
@@ -435,6 +497,7 @@ async function openSheet(id, { force = false } = {}) {
   state.sheet = id; store.set('sheet.' + project(), id);
   state.net = null;
   showIssues();
+  findBar.refresh();
   const dr = state.drawings.find((d) => d.pages.some((p) => p.id === id));
   $('#crumbDrawing').textContent = dr?.title || '';
   $('#sheetName').textContent = tr(editor.doc.name);
@@ -472,6 +535,7 @@ document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#search
 
 // ======================================================================== commands
 const in2d = () => state.mode === '2d' && !!editor.doc;
+const typingNow = () => !!document.activeElement?.closest?.('input, textarea, select, [contenteditable]');
 const in3d = () => state.mode === '3d';
 const tools = [['select', 'select', 'Select', 'v'], ['pan', 'pan', 'Pan', 'h'], ['wire', 'wire', 'Wire', 'w'], ['line', 'line', 'Line', 'l'], ['rect', 'rect', 'Rectangle', 'b'], ['ellipse', 'ellipse', 'Ellipse', 'e'], ['text', 'text', 'Text', 't']];
 for (const [id, ic, title, key] of tools) command({ id: 'tool.' + id, title: `${title} tool`, group: 'Tools', icon: ic, keys: key, when: in2d, run: () => editor.setTool(id) });
@@ -504,6 +568,10 @@ command({ id: 'saveSymbol', title: 'Save selection as symbol…', group: 'Librar
     toast(`Saved "${name}" to the library (${geo.pins.length} pin${geo.pins.length === 1 ? '' : 's'})`, { action: { label: 'Show', run: () => { setLeftTab('symbols'); } } });
   } catch (e) { toast(e.message, { kind: 'err' }); }
 } });
+command({ id: 'group', title: 'Group', group: 'Arrange', icon: 'group', keys: 'mod+g', when: () => in2d() && editor.selection.length > 1 && editor.selectionGroup() == null, run: () => editor.group() });
+command({ id: 'ungroup', title: 'Ungroup', group: 'Arrange', icon: 'ungroup', keys: ['mod+shift+g', 'mod+shift+u'], when: () => in2d() && editor.selection.some((e) => e.group != null), run: () => editor.ungroup() });
+command({ id: 'copyStyle', title: 'Copy format', group: 'Format', icon: 'paint', keys: 'mod+shift+c', when: () => in2d() && !typingNow() && editor.selection.length === 1, run: () => { if (editor.copyStyle()) toast('Format copied — select shapes, then Paste format', { kind: 'info', duration: 1800 }); else toast('This shape has no format to copy', { kind: 'info' }); } });
+command({ id: 'pasteStyle', title: 'Paste format', group: 'Format', icon: 'paint', keys: 'mod+shift+v', when: () => in2d() && !typingNow() && editor.selection.length > 0 && editor.hasStyleClip, run: () => editor.pasteStyle() });
 command({ id: 'front', title: 'Bring to front', group: 'Arrange', icon: 'front', keys: 'mod+]', when: in2d, run: () => editor.reorder(true) });
 command({ id: 'back', title: 'Send to back', group: 'Arrange', icon: 'back', keys: 'mod+[', when: in2d, run: () => editor.reorder(false) });
 for (const k of ['left', 'center', 'right', 'top', 'middle', 'bottom']) command({ id: 'align.' + k, title: `Align ${k}`, group: 'Arrange', icon: 'align' + { left: 'L', center: 'C', right: 'R', top: 'T', middle: 'M', bottom: 'B' }[k], when: () => in2d() && editor.selection.length > 1, run: () => editor.align(k) });
@@ -531,7 +599,9 @@ $('#langBtn').onclick = () => runCommand('lang');
 command({ id: 'palette', title: 'Command palette', group: 'Help', icon: 'command', keys: 'mod+k', run: openPalette });
 $('#paletteBtn').onclick = openPalette;
 command({ id: 'shortcuts', title: 'Keyboard shortcuts', group: 'Help', icon: 'keyboard', keys: '?', run: shortcutsDialog });
-command({ id: 'find', title: 'Find tag / wire / address', group: 'Navigate', icon: 'search', keys: ['mod+f', '/'], when: () => state.mode === '2d', run: () => $('#search').focus() });
+command({ id: 'find', title: 'Find tag / wire / address in the project', group: 'Navigate', icon: 'search', keys: ['mod+f', '/'], when: () => state.mode === '2d', run: () => $('#search').focus() });
+command({ id: 'findText', title: 'Find text on this sheet', group: 'Edit', icon: 'search', when: in2d, run: () => findBar.open({ text: editor.selection.length === 1 ? (editor.selection[0].text || editor.selection[0].tag || null) : null }) });
+command({ id: 'findReplace', title: 'Find and replace on this sheet', group: 'Edit', icon: 'replace', keys: 'mod+h', when: in2d, run: () => findBar.open({ replace: true, text: editor.selection.length === 1 ? (editor.selection[0].text || editor.selection[0].tag || null) : null }) });
 command({ id: 'mode2d', title: 'Drawings workspace', group: 'Navigate', icon: 'sheet', keys: 'alt+1', run: () => setMode('2d') });
 command({ id: 'mode3d', title: 'Panel 3D workspace', group: 'Navigate', icon: 'box3d', keys: 'alt+2', run: () => setMode('3d') });
 command({ id: 'toggleLeft', title: 'Toggle left panel', group: 'View', icon: 'panel', keys: 'mod+b', run: () => { leftOpen = !leftOpen; $('#main').classList.toggle('no-left', !leftOpen || state.mode === '3d'); } });
@@ -544,6 +614,15 @@ command({ id: 'newSheet', title: 'New sheet', group: 'Sheet', icon: 'plus', run:
   try {
     const r = await api(`/api/page/${encodeURIComponent(project())}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, drawing: dr?.file || 'custom', like: state.sheet }) });
     await refreshDrawings(); await openSheet(r.id); toast('Sheet created'); runCheck({ quiet: true });
+  } catch (e) { toast(e.message, { kind: 'err' }); }
+} });
+command({ id: 'duplicateSheet', title: 'Duplicate sheet', group: 'Sheet', icon: 'copy', when: in2d, run: async () => {
+  if (!(await guardUnsaved())) return;
+  const name = await prompt('Duplicate sheet', `${tr(editor.doc.name)} (copy)`, 'Duplicate'); if (!name) return;
+  const dr = state.drawings.find((d) => d.pages.some((p) => p.id === state.sheet));
+  try {
+    const r = await api(`/api/page/${encodeURIComponent(project())}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, drawing: dr?.file || 'custom', copyOf: state.sheet }) });
+    await refreshDrawings(); await openSheet(r.id); toast('Sheet duplicated'); runCheck({ quiet: true });
   } catch (e) { toast(e.message, { kind: 'err' }); }
 } });
 command({ id: 'rename', title: 'Rename sheet', group: 'Sheet', icon: 'text', when: in2d, run: async () => {
@@ -572,6 +651,20 @@ command({ id: 'labels', title: 'Labels', group: '3D', icon: 'tag', keys: 'l', wh
 command({ id: 'wires3d', title: 'Wires', group: '3D', icon: 'cable', keys: 'w', when: in3d, run: () => { panel3d.toggleWires(); renderToolbar(); } });
 command({ id: 'fit3d', title: 'Fit 3D view', group: '3D', icon: 'fit', keys: 'Home', when: in3d, run: () => panel3d.fit() });
 command({ id: 'projects', title: 'Switch project', group: 'Navigate', icon: 'panel', run: () => $('#projectBtn').click() });
+// ---- reports (Excel)
+function download(url) { const a = Object.assign(document.createElement('a'), { href: url, download: '' }); document.body.append(a); a.click(); a.remove(); }
+command({ id: 'exportBom', title: 'Export bill of materials (Excel)', group: 'Reports', icon: 'download', when: () => !!project(), run: () => {
+  download(`/api/export/${encodeURIComponent(project())}/bom.xlsx`);
+  toast('Bill of materials exported — rows marked "check" need a look before ordering', { kind: 'ok', duration: 3200 });
+} });
+command({ id: 'exportWires', title: 'Export wire list (Excel)…', group: 'Reports', icon: 'cable', when: () => !!project(), run: async () => {
+  const cabs = await api('/api/cabinets/' + encodeURIComponent(project())).catch(() => []);
+  if (!cabs.length) { toast('No cabinet in this project yet — the wire list is made per cabinet', { kind: 'info' }); return; }
+  const go = (c) => { download(`/api/export/${encodeURIComponent(project())}/wires/${encodeURIComponent(c)}.xlsx`); toast(`Wire list of ${c} exported`, { kind: 'ok', duration: 1800 }); };
+  if (cabs.length === 1) return go(cabs[0]);
+  const r = $('#paletteBtn').getBoundingClientRect();
+  menu(cabs.map((c) => ({ label: `Cabinet ${c}`, icon: 'box3d', run: () => go(c) })), { x: r.left - 120, y: r.bottom + 6 });
+} });
 command({ id: 'runCheck', title: 'Run electrical check', group: 'Check', icon: 'shield', keys: 'F7', when: () => !!project(), run: async () => { if (state.mode !== '2d') await setMode('2d'); if (!leftOpen) runCommand('toggleLeft'); if (state.leftTab !== 'checks') setLeftTab('checks'); await runCheck(); } });
 command({ id: 'checks', title: 'Show electrical check results', group: 'Check', icon: 'shield', when: () => !!project(), run: async () => { if (state.mode !== '2d') await setMode('2d'); if (!leftOpen) runCommand('toggleLeft'); setLeftTab('checks'); } });
 command({ id: 'nextIssue', title: 'Next check finding', group: 'Check', icon: 'alert', keys: 'shift+F7', when: () => !!state.check?.findings.length, run: () => {
@@ -601,6 +694,12 @@ stage2d.addEventListener('contextmenu', (e) => {
     { label: 'Flip horizontal', keys: k('shift+h'), disabled: !has, run: () => runCommand('flip') },
     { label: 'Bring to front', icon: 'front', keys: k('mod+]'), disabled: !has, run: () => runCommand('front') },
     { label: 'Send to back', icon: 'back', keys: k('mod+['), disabled: !has, run: () => runCommand('back') },
+    editor.selectionGroup() != null || editor.selection.some((x) => x.group != null)
+      ? { label: 'Ungroup', icon: 'ungroup', keys: k('mod+shift+g'), run: () => runCommand('ungroup') }
+      : { label: 'Group', icon: 'group', keys: k('mod+g'), disabled: editor.selection.length < 2, run: () => runCommand('group') },
+    '-',
+    { label: 'Copy format', icon: 'paint', keys: k('mod+shift+c'), disabled: editor.selection.length !== 1, run: () => runCommand('copyStyle') },
+    { label: 'Paste format', keys: k('mod+shift+v'), disabled: !has || !editor.hasStyleClip, run: () => runCommand('pasteStyle') },
     '-',
     { label: 'Save as symbol…', icon: 'lib', disabled: !has, run: () => runCommand('saveSymbol') },
     { label: 'Zoom to selection', icon: 'search', keys: k('shift+2'), disabled: !has, run: () => runCommand('zoomSel') },

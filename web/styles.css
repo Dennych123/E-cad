@@ -240,6 +240,10 @@ svg.sheet .bg-locked { pointer-events: none; }
 svg.sheet .sel-box { fill: none; stroke: var(--accent); stroke-width: 1; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; }
 svg.sheet .sel-all { fill: rgba(255, 122, 26, .05); stroke: var(--accent); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
 svg.sheet .hover-box { fill: none; stroke: var(--accent); stroke-width: 1; opacity: .45; vector-effect: non-scaling-stroke; }
+svg.sheet .sel-outline { fill: none; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; }
+svg.sheet .sel-path { fill: none; stroke: var(--accent); stroke-width: 5; stroke-opacity: .28; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+svg.sheet .handle { fill: #fff; stroke: var(--accent); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+svg.sheet .handle.seg { fill: var(--accent); stroke: #fff; stroke-width: 1.2; }
 svg.sheet .marquee { fill: rgba(255, 122, 26, .07); stroke: var(--accent); stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
 svg.sheet .net-hi { stroke: var(--net); stroke-width: 3.2; stroke-linecap: round; opacity: .9; vector-effect: non-scaling-stroke; }
 svg.sheet .hit { fill: rgba(255, 122, 26, .16); stroke: var(--accent); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
@@ -253,6 +257,15 @@ svg.sheet .grid line { stroke: rgba(26, 77, 143, .10); stroke-width: .5; vector-
 svg.sheet .grid line.major { stroke: rgba(26, 77, 143, .20); }
 svg.sheet .pin { fill: #fff; stroke: var(--net); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
 .stage .empty-state { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-3); text-align: center; pointer-events: none; }
+/* find & replace bar over the drawing (opened by keyboard: appears without motion) */
+.findbar { position: absolute; top: 10px; right: 12px; z-index: 6; display: grid; gap: 6px; width: min(420px, calc(100% - 24px)); padding: 8px; border-radius: var(--r); background: var(--raised); box-shadow: var(--shadow-pop); }
+.fr-row { display: flex; gap: 4px; align-items: center; }
+.fr-row input { flex: 1; }
+.fr-row .ibtn { width: 28px; height: 28px; }
+.fr-row .ibtn .mono { font-size: 11px; font-weight: 500; }
+.ibtn.tog[aria-pressed=true] { background: var(--accent-soft); color: var(--accent); }
+.fr-count { min-width: 68px; text-align: right; color: var(--text-3); font-size: 11.5px; white-space: nowrap; }
+.fr-count.none { color: var(--danger); }
 .inline-text { position: absolute; z-index: 5; font: 14px var(--mono); color: #111; background: #fff; border: 1px solid var(--accent); border-radius: 3px; box-shadow: 0 0 0 3px var(--accent-soft); padding: 2px 4px; min-width: 60px; resize: none; outline: none; }
 
 /* 3D */

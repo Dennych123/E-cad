@@ -138,6 +138,80 @@ export default function (t) {
     });
   });
 
+  t('editor: resize a box by its handle, drag a wire segment, group, format both, undo', async () => {
+    ready();
+    const tp = tempProject();
+    try {
+      await withApp(tp.name, async (b) => {
+        const G = 2.5 * 72 / 25.4, at = (x, y) => scr(b, x, y);
+        const last = (n = 1) => b.eval(`${E}.doc.elements.slice(-${n})`);
+        // rectangle by drag, then its south-east handle 4 grid steps right, 2 down
+        await key(b, 'b');
+        await drag(b, ...(await at(1020, 980)), ...(await at(1020 + 10 * G, 980 + 6 * G)));
+        const [r0] = await last();
+        t.eq(r0.kind, 'rect');
+        await key(b, 'v');
+        await drag(b, ...(await at(r0.x + r0.w, r0.y + r0.h)), ...(await at(r0.x + r0.w + 4 * G, r0.y + r0.h + 2 * G)));
+        const [r1] = await last();
+        t.near(r1.w, r0.w + 4 * G, 0.6, `width ${r0.w} -> ${r1.w}`); t.near(r1.h, r0.h + 2 * G, 0.6, `height ${r0.h} -> ${r1.h}`);
+        t.eq([r1.x, r1.y], [r0.x, r0.y], 'the opposite corner stays');
+        // wire: drag the middle of a straight wire down: it becomes a U and both ends stay on their spots
+        await key(b, 'w');
+        const [p1, p2] = [await at(1020, 1120), await at(1020 + 12 * G, 1120)];
+        await b.click(...p1); await b.click(...p2); await key(b, 'Enter'); await key(b, 'v');
+        const w0 = await b.eval(`(() => { const e = ${E}.doc.elements.at(-1); ${E}.select([e.id]); return e.pts; })()`);
+        t.eq(w0.length, 2);
+        const mx = (w0[0][0] + w0[1][0]) / 2, my = w0[0][1];
+        await drag(b, ...(await at(mx, my)), ...(await at(mx, my + 3 * G)));
+        const [w1] = await last();
+        t.eq(w1.pts.length, 4, JSON.stringify(w1.pts)); t.eq(w1.pts[0], w0[0]); t.eq(w1.pts[3], w0[1]);
+        t.near(w1.pts[1][1] - w0[0][1], 3 * G, 0.6);
+        // group the two; a click on the wire then selects both
+        await b.eval(`${E}.select(${E}.doc.elements.slice(-2).map(e => e.id))`);
+        await key(b, 'g', 2);
+        const g = (await last(2)).map((e) => e.group);
+        t.ok(g[0] != null && g[0] === g[1], 'grouped: ' + g);
+        await key(b, 'Escape');
+        await b.click(...(await at(mx, my + 3 * G)));
+        t.eq(await b.eval(`${E}.selection.length`), 2, 'a click selects the whole group');
+        // format both from the inspector, then undo it
+        const setStyle = (k, v) => b.eval(`(() => { const i = document.querySelector('#inspector [data-style=${k}]'); i.value = '${v}'; i.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+        await setStyle('stroke', '#1a4d8f'); await sleep(300); await setStyle('dash', 'dash'); await sleep(300);
+        t.eq((await last(2)).map((e) => [e.stroke, e.dash]), [['#1a4d8f', 'dash'], ['#1a4d8f', 'dash']]);
+        await key(b, 'z', 2); await key(b, 'z', 2);
+        t.eq((await last(2)).map((e) => `${e.stroke}|${e.dash || ''}`), ['#000|', '#000|']);
+        t.eq(b.errors(), []);
+      });
+    } finally { tp.dispose(); }
+  });
+
+  t('editor: find and replace on a sheet (Ctrl+H), replace all is one undo step', async () => {
+    ready();
+    const tp = tempProject();
+    try {
+      await withApp(tp.name, async (b) => {
+        const n0 = await b.eval(`${E}.findText('INPUT UNIT').length`);
+        t.ok(n0 > 0, 'the PLC sheet has INPUT UNIT headers');
+        await key(b, 'h', 2);
+        await b.waitFor(`!!document.querySelector('.findbar:not([hidden])') && document.activeElement?.dataset.f === 'find'`);
+        await b.send('Input.insertText', { text: 'INPUT UNIT' });
+        await sleep(250);
+        t.eq(await b.eval(`document.querySelector('.fr-count').textContent`), `1 of ${n0}`);
+        t.eq(await b.eval(`document.querySelectorAll('#stage2d .focus').length`), 1, 'current match framed');
+        await b.eval(`document.querySelector('.findbar [data-f=rep]').focus()`);
+        await b.send('Input.insertText', { text: 'INPUT MODULE' });
+        await b.eval(`document.querySelector('.findbar [data-act=all]').click()`);
+        await sleep(300);
+        t.eq(await b.eval(`${E}.findText('INPUT MODULE').length`), n0);
+        t.eq(await b.eval(`document.querySelector('.fr-count').textContent`), 'No results');
+        await b.eval(`document.activeElement.blur()`);
+        await key(b, 'z', 2);
+        t.eq(await b.eval(`${E}.findText('INPUT UNIT').length`), n0, 'one undo restores every replacement');
+        t.eq(b.errors(), []);
+      });
+    } finally { tp.dispose(); }
+  });
+
   t('editor: place a symbol, glue a wire to it, move it, undo, save, reload - and the index knows the new tag', async () => {
     ready();
     const tp = tempProject();

@@ -4,6 +4,7 @@
 // re-rendering touches only the elements whose object changed.
 import {
   PT, GRID_MM, elementBox, snapPoints, moved, rotated, renderElement, symbolElement, docToRawPage, nextId, symPoint, elementShapes,
+  resized, dragWireVertex, dragWireEnd, dragWireSegment, insertVertex, removeVertex, cleanPts, restyled, styleOf, STYLE_KEYS,
 } from '/lib/sheetdoc.js';
 import { indexPage } from '/lib/sheetindex.js';
 import { buildNets, distSeg, labelsOfNet } from '/lib/nets.js';
@@ -14,7 +15,7 @@ const GRID = GRID_MM * PT;                               // 2.5 mm in points
 const f2 = (v) => +(+v).toFixed(2);
 const JP_W = 1.0, LATIN_W = 0.58;                        // average glyph widths (em) for fit-to-width
 
-export function createEditor(stage, { api, project, onChange, onSelect, onCursor, onNet, onTool, onNavigate, toast }) {
+export function createEditor(stage, { api, project, onChange, onSelect, onCursor, onNet, onTool, onNavigate, onView, toast }) {
   let doc = null, els = [], saved = null, past = [], future = [];
   let svg = null, fgLayer = null, bgLayer = null, ovl = null, gridLayer = null;
   const nodes = new Map();                               // element id -> DOM node
@@ -127,7 +128,11 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
   function setLanguage(en) { english = en; if (!svg) return; translateTree(bgLayer); for (const n of nodes.values()) if (n.__el.kind === 'visio') translateTree(n); else { const f = nodeOf(n.__el); n.replaceWith(f); } }
 
   // ------------------------------------------------------------------ view box
-  const setVB = () => { svg?.setAttribute('viewBox', vb.map(f2).join(' ')); drawGrid(); drawOverlay(); };
+  let viewRaf = 0;
+  const setVB = () => {
+    svg?.setAttribute('viewBox', vb.map(f2).join(' ')); drawGrid(); drawOverlay();
+    if (onView && !viewRaf) viewRaf = requestAnimationFrame(() => { viewRaf = 0; onView(); });
+  };
   function fit() { if (!doc) return; const pad = doc.width * 0.02; vb = [-pad, -pad, doc.width + 2 * pad, doc.height + 2 * pad]; setVB(); }
   function zoomBy(k, cx, cy) {
     const r = stage.getBoundingClientRect();
@@ -245,15 +250,123 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
     if (!ovl) return;
     const pad = pxToPt(3);
     let h = '';
+    const ht = drag?.kind === 'move' ? null : handleTarget();
     if (hoverId && !sel.has(hoverId) && tool === 'select') { const b = boxOf([hoverId]); if (b) h += rectSvg(b, pad, 'hover-box'); }
-    for (const id of sel) { const b = boxOf([id]); if (b) h += rectSvg(b, pad, 'sel-box'); }
+    for (const id of sel) { if (ht?.el.id === id) continue; const b = boxOf([id]); if (b) h += rectSvg(b, pad, 'sel-box'); }
     if (sel.size > 1) { const b = boxOf(sel); if (b) h += rectSvg(b, pad * 2, 'sel-all'); }
-    if (sel.size === 1) { const e = byId([...sel][0]); if (e) for (const [x, y] of snapPoints(e)) h += `<circle class="pin" cx="${x}" cy="${y}" r="${f2(pxToPt(3))}"/>`; }
+    if (sel.size === 1 && !ht) { const e = byId([...sel][0]); if (e) for (const [x, y] of snapPoints(e)) h += `<circle class="pin" cx="${x}" cy="${y}" r="${f2(pxToPt(3))}"/>`; }
     if (netHi) h += netHi.map((s) => `<line class="net-hi" x1="${s[0]}" y1="${s[1]}" x2="${s[2]}" y2="${s[3]}"/>`).join('');
     for (const m of marks) h += m.kind === 'band' ? `<rect class="band" x="${m.x}" y="${m.y}" width="${m.w}" height="${m.h}"/>` : rectSvg(m.box, 2.5, m.kind);
-    ovl.innerHTML = issuesSvg() + h + extra;
+    ovl.innerHTML = issuesSvg() + h + (ht ? handlesSvg(ht) : '') + extra;   // handles on top of everything
   }
   const rectSvg = ([x, y, w, h], p, cls) => `<rect class="${cls}" x="${f2(x - p)}" y="${f2(y - p)}" width="${f2(w + 2 * p)}" height="${f2(h + 2 * p)}" rx="1.5"/>`;
+
+  // ------------------------------------------------------------------ handles: resize boxes, edit wire/line points
+  // One selected rect/ellipse gets 8 resize handles; one selected wire/line gets a handle per vertex and a
+  // midpoint handle per segment (wire: drag the segment square to its direction; line: adds a vertex).
+  let preview = null;                                   // element being reshaped (not committed yet)
+  function handleTarget() {
+    if (sel.size !== 1 || tool !== 'select') return null;
+    const id = [...sel][0];
+    const el = preview?.id === id ? preview : byId(id);
+    if (!el) return null;
+    if (el.kind === 'rect' || el.kind === 'ellipse') return { el, kind: 'box' };
+    if (el.kind === 'wire' || el.kind === 'line') return { el, kind: 'path' };
+    return null;
+  }
+  function handlesOf(t) {
+    if (t.kind === 'box') {
+      const [x, y, w, h] = elementBox(t.el, doc);
+      return [['nw', x, y], ['n', x + w / 2, y], ['ne', x + w, y], ['e', x + w, y + h / 2], ['se', x + w, y + h], ['s', x + w / 2, y + h], ['sw', x, y + h], ['w', x, y + h / 2]]
+        .map(([id, hx, hy]) => ({ id, type: 'resize', x: hx, y: hy }));
+    }
+    const pts = t.el.pts, out = pts.map(([x, y], i) => ({ id: 'v' + i, type: 'vertex', i, x, y }));
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [a, b] = [pts[i], pts[i + 1]];
+      if (Math.hypot(b[0] - a[0], b[1] - a[1]) < pxToPt(28)) continue;    // no room for a midpoint handle
+      out.push({ id: 's' + i, type: 'segment', i, x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, horiz: Math.abs(a[1] - b[1]) < 0.01, vert: Math.abs(a[0] - b[0]) < 0.01 });
+    }
+    return out;
+  }
+  function handleAt(p) {
+    const t = handleTarget(); if (!t) return null;
+    let best = null, bd = pxToPt(6);
+    for (const h of handlesOf(t)) { const d = Math.max(Math.abs(h.x - p.x), Math.abs(h.y - p.y)); if (d <= bd) { bd = d; best = h; } }
+    return best && { ...best, el: t.el };
+  }
+  function handlesSvg(t) {
+    const s = pxToPt(7), r = pxToPt(3.5);
+    let out = t.kind === 'box' ? rectSvg(elementBox(t.el, doc), 0, 'sel-outline') : `<polyline class="sel-path" points="${t.el.pts.map((q) => q.join(',')).join(' ')}"/>`;
+    for (const h of handlesOf(t)) out += h.type === 'segment' ? `<circle class="handle seg" cx="${f2(h.x)}" cy="${f2(h.y)}" r="${f2(r)}"/>` : `<rect class="handle" x="${f2(h.x - s / 2)}" y="${f2(h.y - s / 2)}" width="${f2(s)}" height="${f2(s)}"/>`;
+    return out;
+  }
+  const CURSOR = { nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize', n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize' };
+  const cursorOf = (h) => (h.type === 'resize' ? CURSOR[h.id] : h.type === 'segment' && h.el.kind === 'wire' ? (h.horiz ? 'ns-resize' : h.vert ? 'ew-resize' : 'move') : h.type === 'segment' ? 'copy' : 'move');
+  function showPreview(el) {
+    preview = el;
+    const old = nodes.get(el.id);
+    if (old) old.replaceWith(nodeOf(el));
+    drawOverlay();
+  }
+  /** wire junction dots stay only where an end still lies; an end dropped onto a wire gets one */
+  function withDots(el, snapped) {
+    if (el.kind !== 'wire') return el;
+    const ends = [el.pts[0], el.pts.at(-1)];
+    const dots = (el.dots || []).filter(([x, y]) => ends.some((q) => Math.abs(q[0] - x) < 0.01 && Math.abs(q[1] - y) < 0.01));
+    if (snapped?.kind === 'wire' && !dots.some(([x, y]) => x === snapped.x && y === snapped.y)) dots.push([snapped.x, snapped.y]);
+    const out = { ...el };
+    if (dots.length) out.dots = dots; else delete out.dots;
+    return out;
+  }
+  function applyHandle(d, p, ev) {
+    const { h, el0 } = d;
+    const grid = (q) => (ev.altKey ? q : snapPoint(q, { allowT: false, targets: [] }));
+    if (h.type === 'resize') {
+      const s = grid(p);
+      const [x, y, w, hh] = elementBox(el0, doc);
+      let x0 = x, y0 = y, x1 = x + w, y1 = y + hh;
+      if (h.id.includes('w')) x0 = s.x; if (h.id.includes('e')) x1 = s.x;
+      if (h.id.includes('n')) y0 = s.y; if (h.id.includes('s')) y1 = s.y;
+      if (ev.shiftKey && h.id.length === 2 && w > 0 && hh > 0) {             // corner + Shift keeps the proportions
+        const fx = h.id.includes('w') ? x + w : x, fy = h.id.includes('n') ? y + hh : y;
+        const k = Math.max(Math.abs(s.x - fx) / w, Math.abs(s.y - fy) / hh);
+        const mx = fx + Math.sign(s.x - fx || 1) * w * k, my = fy + Math.sign(s.y - fy || 1) * hh * k;
+        [x0, x1, y0, y1] = [Math.min(fx, mx), Math.max(fx, mx), Math.min(fy, my), Math.max(fy, my)];
+      }
+      return resized(el0, [Math.min(x0, x1), Math.min(y0, y1), Math.max(1, Math.abs(x1 - x0)), Math.max(1, Math.abs(y1 - y0))]);
+    }
+    if (h.type === 'vertex') {
+      const n = el0.pts.length, end = h.i === 0 || h.i === n - 1;
+      if (el0.kind === 'line') { const s = ev.altKey ? p : snapPoint(p, { exclude: el0.id, allowT: false }); return { ...el0, pts: el0.pts.map((q, k) => (k === h.i ? [f2(s.x), f2(s.y)] : q)) }; }
+      if (end) {
+        const s = ev.altKey ? { x: p.x, y: p.y, kind: 'free' } : snapPoint(p, { exclude: el0.id });
+        return withDots({ ...el0, pts: dragWireEnd(el0.pts, h.i === 0 ? 0 : 1, [f2(s.x), f2(s.y)]) }, s);
+      }
+      const s = grid(p);
+      return withDots({ ...el0, pts: dragWireVertex(el0.pts, h.i, [f2(s.x), f2(s.y)]) });
+    }
+    // wire segment: perpendicular move (lines were turned into a vertex drag on pointer-down)
+    return withDots({ ...el0, pts: dragWireSegment(el0.pts, h.i, ev.altKey ? p.x - d.x : snapDelta(p.x - d.x), ev.altKey ? p.y - d.y : snapDelta(p.y - d.y)) });
+  }
+  function startHandle(h, p, e) {
+    let el0 = h.el, hh = h;
+    if (h.type === 'segment' && h.el.kind === 'line') {                     // a line gets a new vertex here
+      el0 = { ...h.el, pts: insertVertex(h.el.pts, h.i, [h.x, h.y]) };
+      hh = { ...h, type: 'vertex', i: h.i + 1 };
+    }
+    drag = { kind: 'handle', h: hh, el0, orig: h.el, x: p.x, y: p.y, moved: false };
+    stage.setPointerCapture(e.pointerId);
+  }
+  function deleteVertexAt(p) {
+    const h = handleAt(p);
+    if (!h || h.type !== 'vertex') return false;
+    const el = h.el, n = el.pts.length;
+    if (el.kind === 'wire' && (h.i === 0 || h.i === n - 1)) return false;  // ends stay on their pins
+    if (n <= 2) return false;
+    const pts = el.kind === 'wire' ? cleanPts(removeVertex(el.pts, h.i)) : removeVertex(el.pts, h.i);
+    commit(els.map((e) => (e.id === el.id ? { ...el, pts } : e)), 'Delete point');
+    return true;
+  }
 
   // ------------------------------------------------------------------ nets
   function showElementNet(el) {
@@ -287,21 +400,22 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
   }
 
   // ------------------------------------------------------------------ snapping
-  function snapTargets() {
+  function snapTargets(exclude = null) {
     const pts = [];
-    for (const e of els) pts.push(...snapPoints(e));
-    if (pageIx) for (const s of pageIx.segs) pts.push([s[0], s[1]], [s[2], s[3]]);
+    for (const e of els) if (e.id !== exclude) pts.push(...snapPoints(e));
+    if (pageIx) for (const s of pageIx.segs) if (exclude == null || shapeOwner.get(s[4]) !== exclude) pts.push([s[0], s[1]], [s[2], s[3]]);
     return pts;
   }
-  /** snap a point: pins / wire ends first, then onto a wire (T), then the grid */
-  function snapPoint(p, { targets = null, allowT = true } = {}) {
+  /** snap a point: pins / wire ends first, then onto a wire (T), then the grid. `exclude`: an element being reshaped */
+  function snapPoint(p, { targets = null, allowT = true, exclude = null } = {}) {
     if (!snapOn) return { x: p.x, y: p.y, kind: 'free' };
     const tol = pxToPt(9);
     let best = null, bd = tol;
-    for (const [x, y] of targets || snapTargets()) { const d = Math.hypot(x - p.x, y - p.y); if (d < bd) { bd = d; best = { x, y, kind: 'pin' }; } }
+    for (const [x, y] of targets || snapTargets(exclude)) { const d = Math.hypot(x - p.x, y - p.y); if (d < bd) { bd = d; best = { x, y, kind: 'pin' }; } }
     if (best) return best;
     if (allowT && pageIx) {
       for (const s of pageIx.segs) {
+        if (exclude != null && shapeOwner.get(s[4]) === exclude) continue;
         const d = distSeg(p.x, p.y, s);
         if (d < pxToPt(6)) {
           const [x1, y1, x2, y2] = s, dx = x2 - x1, dy = y2 - y1, L = dx * dx + dy * dy, u = L ? Math.max(0, Math.min(1, ((p.x - x1) * dx + (p.y - y1) * dy) / L)) : 0;
@@ -324,11 +438,15 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
     if (tool === 'wire' || tool === 'line') { wireClick(p, e); return; }
     if (tool === 'rect' || tool === 'ellipse') { const s = snapPoint(p, { allowT: false }); drag = { kind: 'shape', x0: s.x, y0: s.y, x1: s.x, y1: s.y }; stage.setPointerCapture(e.pointerId); return; }
     if (tool === 'text') { const s = snapPoint(p, { allowT: false }); newText(s.x, s.y); return; }
-    // select tool
+    // select tool: handles of the selected shape first
+    const hd = handleAt(p);
+    if (hd && !e.shiftKey) { startHandle(hd, p, e); return; }
     const id = elementAt(e.clientX, e.clientY);
     if (id != null) {
-      if (e.shiftKey) { select([id], { add: true }); return; }
-      if (!sel.has(id)) select([id]);
+      // a click selects the whole group; Ctrl+click reaches one member
+      const ids = e.ctrlKey || e.metaKey ? [id] : groupOf(id);
+      if (e.shiftKey) { select(ids, { add: true }); return; }
+      if (!sel.has(id) || ((e.ctrlKey || e.metaKey) && sel.size > 1)) select(ids);
       drag = { kind: 'move', x: p.x, y: p.y, dx: 0, dy: 0, ids: [...sel], moved: false };
     } else {
       if (!e.shiftKey) select([]);
@@ -341,13 +459,22 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
     const p = toSvg(e.clientX, e.clientY);
     onCursor?.({ x: f2(p.x / PT), y: f2((doc.height - p.y) / PT) });
     if (!drag) {
-      if (tool === 'select' && !spaceDown) { const id = elementAt(e.clientX, e.clientY); if (id !== hoverId) { hoverId = id; drawOverlay(); } }
+      if (tool === 'select' && !spaceDown) {
+        const hd = handleAt(p);
+        svg.style.cursor = hd ? cursorOf(hd) : '';
+        const id = hd ? null : elementAt(e.clientX, e.clientY);
+        if (id !== hoverId) { hoverId = id; drawOverlay(); }
+      }
       if (tool === 'place' && placing) ghostAt(p);
       if ((tool === 'wire' || tool === 'line') && draft) drawDraft(p, e);
       else if (tool === 'wire' || tool === 'line') { const s = snapPoint(p); drawOverlay(s.kind !== 'grid' ? snapMark(s) : ''); }
       return;
     }
-    if (drag.kind === 'pan') {
+    if (drag.kind === 'handle') {
+      if (!drag.moved && Math.hypot(p.x - drag.x, p.y - drag.y) < pxToPt(2)) return;
+      drag.moved = true;
+      showPreview(applyHandle(drag, p, e));
+    } else if (drag.kind === 'pan') {
       const r = stage.getBoundingClientRect(), s = Math.max(drag.vb[2] / r.width, drag.vb[3] / r.height);
       vb = [drag.vb[0] - (e.clientX - drag.x) * s, drag.vb[1] - (e.clientY - drag.y) * s, drag.vb[2], drag.vb[3]];
       setVB();
@@ -407,6 +534,15 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
   function onUp(e) {
     const d = drag; drag = null; stage.classList.remove('dragging');
     if (!d) return;
+    if (d.kind === 'handle') {
+      const cur = preview; preview = null;
+      if (d.moved && cur && JSON.stringify(cur) !== JSON.stringify(d.orig)) {
+        const label = d.h.type === 'resize' ? 'Resize' : d.h.type === 'segment' ? 'Move segment' : d.orig.pts?.length !== cur.pts?.length && d.el0 !== d.orig ? 'Add point' : 'Move point';
+        commit(els.map((el) => (el.id === cur.id ? cur : el)), label);
+      } else sync(els);
+      drawOverlay();
+      return;
+    }
     if (d.kind === 'move') {
       if (d.moved && (d.dx || d.dy)) {
         const ids = new Set(d.ids);
@@ -416,8 +552,9 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
     } else if (d.kind === 'marquee') {
       const [x, y, w, h] = norm(d);
       if (w > pxToPt(3) || h > pxToPt(3)) {
-        const inside = els.filter((el) => { const [bx, by, bw, bh] = elementBox(el, doc); return bw + bh > 0 && bx >= x && by >= y && bx + bw <= x + w && by + bh <= y + h; }).map((el) => el.id);
-        select(inside, { add: d.add });
+        const inside = new Set(els.filter((el) => { const [bx, by, bw, bh] = elementBox(el, doc); return bw + bh > 0 && bx >= x && by >= y && bx + bw <= x + w && by + bh <= y + h; }).map((el) => el.id));
+        // a group is picked only when all of it is inside
+        select([...inside].filter((id) => groupOf(id).every((m) => inside.has(m))), { add: d.add });
       }
       drawOverlay();
     } else if (d.kind === 'shape') {
@@ -519,14 +656,75 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
     return false;
   }
   function setVisioText(el, shapeId, text) {
+    commit(els.map((e) => (e.id === el.id ? withVisioText(el, shapeId, text) : e)), 'Edit text');
+  }
+  /** an imported shape with new text for one of its sub-shapes: the <text> inside that shape's group */
+  function withVisioText(el, shapeId, text) {
     const esc = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
     const lines = text.split('\n');
-    const svgNew = el.svg.replace(/(<text\b[^>]*>)([\s\S]*?)(<\/text>)/, (m, a, _b, c) => {
-      const x = /\bx="([^"]+)"/.exec(a)?.[1] || '0';
-      return a + lines.map((l, i) => `<tspan x="${x}"${i ? ' dy="1.2em"' : ''}>${esc(l)}</tspan>`).join('') + c;
+    const at = el.svg.search(new RegExp(`id="(shape|group)${shapeId}-`));
+    const t0 = el.svg.indexOf('<text', Math.max(0, at)), t1 = t0 < 0 ? -1 : el.svg.indexOf('</text>', t0);
+    let svgNew = el.svg;
+    if (t1 > 0) {
+      const open = el.svg.slice(t0, el.svg.indexOf('>', t0) + 1);
+      const x = /\bx="([^"]+)"/.exec(open)?.[1] || '0';
+      svgNew = el.svg.slice(0, t0) + open + lines.map((l, i) => `<tspan x="${x}"${i ? ' dy="1.2em"' : ''}>${esc(l)}</tspan>`).join('') + el.svg.slice(t1);
+    }
+    return { ...el, svg: svgNew, shapes: el.shapes.map((s) => (s.id === shapeId ? { ...s, text } : s)) };
+  }
+
+  // ------------------------------------------------------------------ find & replace (this sheet)
+  // Searches what the sheet says: free text, symbol tags, imported shapes' text. With English display on,
+  // a match in the translation is found too, but only text written in the document can be replaced.
+  const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const findRe = (q, { matchCase, word }) => new RegExp(`${word ? '(?<![A-Za-z0-9_])' : ''}${reEsc(q)}${word ? '(?![A-Za-z0-9_])' : ''}`, matchCase ? 'g' : 'gi');
+  function findText(q, opts = {}) {
+    if (!q || !doc) return [];
+    const re = findRe(q, opts), out = [];
+    const test = (text, m) => {
+      re.lastIndex = 0;
+      if (re.test(text)) { out.push({ ...m, text, replaceable: true }); return; }
+      const en = english ? translate(text, dict) : null;
+      re.lastIndex = 0;
+      if (en && re.test(en)) out.push({ ...m, text: en, replaceable: false });
+    };
+    for (const el of els) {
+      if (el.kind === 'text') test(el.text, { el: el.id, field: 'text', box: elementBox(el, doc) });
+      else if (el.kind === 'symbol' && el.tag) test(el.tag, { el: el.id, field: 'tag', box: pageIx?.texts.find((t) => t.id === el.id * 1000 + 999)?.box || elementBox(el, doc) });
+      else if (el.kind === 'visio') for (const s of el.shapes || []) if (s.text) test(s.text, { el: el.id, shape: s.id, field: 'visio', box: pageIx?.texts.find((t) => t.id === s.id)?.box || elementBox(el, doc) });
+    }
+    // reading order: top to bottom, then left to right (rows within 6 pt)
+    return out.sort((a, b) => (Math.abs(a.box[1] - b.box[1]) > 6 ? a.box[1] - b.box[1] : a.box[0] - b.box[0]));
+  }
+  function showMatches(list, current = -1, reveal = true) {
+    marks = list.map((m, i) => ({ kind: i === current ? 'focus' : 'hit', box: m.box }));
+    const m = list[current];
+    if (!m || !reveal) { drawOverlay(); return; }
+    // bring the match into view; zoom in only when it would be unreadably small
+    const cx = m.box[0] + m.box[2] / 2, cy = m.box[1] + m.box[3] / 2;
+    const inView = cx > vb[0] + vb[2] * 0.08 && cx < vb[0] + vb[2] * 0.92 && cy > vb[1] + vb[3] * 0.08 && cy < vb[1] + vb[3] * 0.92;
+    const w = vb[2] > doc.width / 2.5 ? doc.width / 4 : vb[2];
+    if (inView && w === vb[2]) drawOverlay(); else zoomTo(cx, cy, w);
+  }
+  /** replace in the given matches (default: every replaceable match), one undo step; returns the count */
+  function replaceText(q, rep, opts = {}, only = null) {
+    const re = findRe(q, opts);
+    const want = (only || findText(q, opts)).filter((m) => m.replaceable);
+    if (!want.length) return 0;
+    const byEl = new Map();
+    for (const m of want) { if (!byEl.has(m.el)) byEl.set(m.el, []); byEl.get(m.el).push(m); }
+    let n = 0;
+    const next = els.map((el) => {
+      const ms = byEl.get(el.id); if (!ms) return el;
+      const sub = (t) => t.replace(re, () => { n++; return rep; });
+      if (el.kind === 'text') return { ...el, text: sub(el.text) };
+      if (el.kind === 'symbol') return { ...el, tag: sub(el.tag) };
+      let e = el;
+      for (const m of ms) { const s = e.shapes.find((x) => x.id === m.shape); if (s) e = withVisioText(e, s.id, sub(s.text)); }
+      return e;
     });
-    const next = { ...el, svg: svgNew, shapes: el.shapes.map((s) => (s.id === shapeId ? { ...s, text } : s)) };
-    commit(els.map((e) => (e.id === el.id ? next : e)), 'Edit text');
+    commit(next, n === 1 ? 'Replace' : `Replace ${n}`);
+    return n;
   }
 
   // ------------------------------------------------------------------ symbols
@@ -570,10 +768,58 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
     return pre + n;
   }
 
+  // ------------------------------------------------------------------ groups
+  // A group is a shared `group` number on its members: the document stays a flat list (the indexer and
+  // the renderer need nothing new); clicking any member selects them all.
+  function groupOf(id) {
+    const g = byId(id)?.group;
+    return g == null ? [id] : els.filter((e) => e.group === g).map((e) => e.id);
+  }
+  function group() {
+    if (sel.size < 2) return false;
+    const gid = Math.max(0, ...els.map((e) => e.group || 0)) + 1;
+    commit(els.map((e) => (sel.has(e.id) ? { ...e, group: gid } : e)), `Group ${sel.size} shapes`);
+    return true;
+  }
+  function ungroup() {
+    const list = selected().filter((e) => e.group != null);
+    if (!list.length) return false;
+    commit(els.map((e) => { if (!sel.has(e.id) || e.group == null) return e; const { group: _g, ...rest } = e; return rest; }), 'Ungroup');
+    emitSelect();
+    return true;
+  }
+  /** the selection is exactly one whole group */
+  function selectionGroup() {
+    const list = selected();
+    const g = list[0]?.group;
+    return g != null && list.every((e) => e.group === g) && list.length === els.filter((e) => e.group === g).length ? g : null;
+  }
+
   // ------------------------------------------------------------------ edit operations
   function update(id, patch, label = 'Edit') {
     commit(els.map((e) => (e.id === id ? { ...structuredClone(e), ...patch } : e)), label);
   }
+  /** rect / ellipse to a new box (pt) */
+  function reshape(id, box) {
+    const el = byId(id);
+    if (el && (el.kind === 'rect' || el.kind === 'ellipse')) commit(els.map((e) => (e.id === id ? resized(e, box) : e)), 'Resize');
+  }
+  /** style every selected shape that understands the given keys (one undo step) */
+  function restyle(style, label = 'Format') {
+    const next = els.map((e) => (sel.has(e.id) ? restyled(e, style) : e));
+    if (next.some((e, i) => e !== els[i])) commit(next, label);
+  }
+  // format painter: copy the style of one shape, paste it onto the selection
+  let styleClip = null;
+  function copyStyle() {
+    const [el] = selected();
+    if (!el || !STYLE_KEYS[el.kind]) return false;
+    styleClip = { kind: el.kind, style: styleOf(el) };
+    // keys the source leaves at their default are reset on the target
+    for (const k of STYLE_KEYS[el.kind]) if (!(k in styleClip.style)) styleClip.style[k] = null;
+    return true;
+  }
+  function pasteStyle() { if (!styleClip || !sel.size) return false; restyle(styleClip.style, 'Paste format'); return true; }
   function deleteSel() {
     if (!sel.size) return;
     const n = sel.size;
@@ -656,8 +902,11 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
     if (!list?.length) return;
     let id = nextId({ elements: els });
     const off = GRID * 2;
+    let gnext = Math.max(0, ...els.map((e) => e.group || 0)) + 1;
+    const gmap = new Map();                                  // pasted groups become new groups
     const fresh = list.map((e) => {
       const n = moved(structuredClone(e), off, off);
+      if (n.group != null) { if (!gmap.has(n.group)) gmap.set(n.group, gnext++); n.group = gmap.get(n.group); }
       const nid = id++;
       if (n.kind === 'visio') {
         const map = new Map(n.shapes.map((s, k) => [s.id, nid * 1000 + k]));
@@ -682,6 +931,7 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
     tool = t;
     stage.className = stage.className.replace(/\btool-\S+/g, '').trim() + ' tool-' + t;
     hoverId = null;
+    if (svg) svg.style.cursor = '';
     drawOverlay();
     onTool?.(t, placing?.sym || null);
   }
@@ -745,6 +995,7 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
   stage.addEventListener('dblclick', (e) => {
     if (tool === 'wire' || tool === 'line') { finishDraft(); return; }
     if (tool === 'select') {
+      if (deleteVertexAt(toSvg(e.clientX, e.clientY))) return;            // double-click a corner point removes it
       const id = elementAt(e.clientX, e.clientY);
       // references (L-number arrows) follow on double-click, like a cross-reference in an ECAD tool;
       // everything else edits its text (F2 edits a reference's text)
@@ -767,7 +1018,9 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
   return {
     open, save, fit, zoomBy, zoomTo, zoomPct, zoomToPct, exportSvg, setTool, escape, undo, redo,
     deleteSel, rotateSel, flipSel, zoomToSelection, selectionAsSymbol, reorder, align, nudge, copy, cut, paste, duplicate, selectAll, select, update, editSelectedText,
-    startPlace, dropSymbol, setSymbols, setLanguage, focusShape, gotoRow, finishDraft,
+    startPlace, dropSymbol, setSymbols, setLanguage, focusShape, gotoRow, finishDraft, group, ungroup, selectionGroup,
+    restyle, copyStyle, pasteStyle, reshape, get hasStyleClip() { return !!styleClip; },
+    findText, showMatches, replaceText, clearMarks() { if (marks.length) { marks = []; drawOverlay(); } },
     async rename(name) { if (!doc) return; doc.name = name; saved = null; emitChange(); return save(); },
     setDict(d) { dict = d; },
     /** findings of the electrical check on this sheet: [{ shape, key, severity }] */

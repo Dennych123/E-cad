@@ -28,7 +28,12 @@ Architecture decisions: `docs/ARCHITECTURE.md`. Feature checklist vs SKYCAD Elec
 - Translation is display-only: `<text>` nodes are replaced in the DOM and shrunk with a transform about their
   anchor when English runs longer; the document keeps the original text. Dictionaries: `library/i18n`
   (generic, public) + `projects/<p>/i18n` (machine-specific, private). The Denso frame footer is a raster image.
-- Double-click: L-number references follow; everything else edits text (F2 edits a reference's text).
+- Double-click: L-number references follow; everything else edits text (F2 edits a reference's text);
+  on a selected wire/line's corner it removes the point.
+- Handles: one selected rect/ellipse resizes; one selected wire/line edits points (`lib/sheetdoc.js`
+  dragWireVertex/End/Segment keep wires orthogonal and never move a wire end off its pin - unit-tested).
+- Groups are a shared `group` number on flat elements (no nesting); paste gives copies new group numbers.
+- Style keys per kind live in `STYLE_KEYS`; defaults are not stored (`dash: solid`, `font: mono`...).
 - The 3D panel shares the inspector element: its listeners must check `active`.
 
 ## UI rules (Emil Kowalski's design-engineering skill, github.com/emilkowalski/skills)
@@ -47,6 +52,7 @@ npm install
 npm start                      # http://127.0.0.1:7670/  ?project=&mode=2d|3d&sheet=&key=&box=&cabinet=&door=90&xray=1
 npm test                       # node tests/run.js: unit, JS<->Python parity, real-browser clicks (Edge/Chrome over CDP)
 node tools/check.js <project> [--json] [--fail-on error|warning]   # electrical check; exit 1 on findings (CI)
+node tools/export.js <project> bom | wires <cabinet> [--out f.xlsx] [--json]   # reports (default projects/<p>/out/)
 node server/mcp.js             # MCP server (AI port), registered for Claude Code by .mcp.json
 node tools/step2glb.js <maker.stp> --part <P/N> --front -y --up +z    # maker STEP -> GLB at real size
 node tools/extract-symbols.js <project>     # symbol library from the imported drawings (+ symbols/names.yaml curation)
@@ -63,6 +69,12 @@ node tools/make-icon.js        # web/ecad.ico from the app mark (desktop shortcu
   Every face basis in `web/view3d.js` is right-handed with `w` = outward normal (bottom is the exception).
 - Server binds 127.0.0.1 (`--lan` for the LAN); writes only from this PC unless `--lan-edit`; static paths
   cannot escape their mapped folder.
+
+## Reports (server/bom.js, lib/xlsx.js)
+- BOM quantity = devices listed for the part (cabinets, modules, placed symbols with a part number, module
+  cables); labels on the drawings count only when nothing is listed; more labels than devices = "check".
+  Tags found next to labels are shown for orientation and never change a quantity.
+- `lib/xlsx.js` writes .xlsx with no dependency (stored ZIP); tests read it back with openpyxl when present.
 
 ## Electrical check (server/checks.js) and the AI port (server/mcp.js)
 - Rules are data: `RULES` = `{ id, title, severity, help }`; `runChecks()` returns `summary`, a `checklist`

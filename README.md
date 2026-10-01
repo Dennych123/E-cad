@@ -48,6 +48,11 @@ node tools/check.js <project> --fail-on warning   # exit 1 on warnings too (defa
 
 Load estimates use `library/electrical/loads.yaml`. Each value is marked `datasheet` or `assumed`, and every result lists the assumed values it used. A project can override them in `projects/<name>/electrical.yaml`.
 
+## Reports
+
+- **Bill of materials:** Parts tab → download button, or `node tools/export.js <project> bom`. One row per part number. The workbook also has a sheet grouped by location (cabinet or box). Quantity counts the devices listed for the part. When nothing is listed, it counts the part labels on the drawings instead. Rows marked *check* have more labels on the drawings than listed devices; confirm them before ordering.
+- **Wire list:** command palette → *Export wire list*, or `node tools/export.js <project> wires <cabinet>`. One row per wire, with from/to, line and the length routed through the ducts.
+
 ## AI port (MCP)
 
 `.mcp.json` registers the server for Claude Code in this folder. For another client, run `node server/mcp.js`, which speaks JSON-RPC over stdio. The tools are:
@@ -62,6 +67,7 @@ Load estimates use `library/electrical/loads.yaml`. Each value is marked `datash
 | `ecad_search` | identifiers matching a substring |
 | `ecad_nets` | connected wiring on a sheet, with labels and devices |
 | `ecad_wires` | from–to wire list of a cabinet, routed, with lengths |
+| `ecad_bom` | bill of materials, with the basis of each quantity |
 | `ecad_components`, `ecad_symbols` | parts catalogue and symbol library |
 
 ## Development

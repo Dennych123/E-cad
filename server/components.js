@@ -3,7 +3,20 @@
 // it, where it is used, and which library symbol draws it.
 import { hasJapanese } from '../lib/i18n.js';
 
-const PART_RE = /^(?=.*\d)(?=.*[A-Z])[A-Z][A-Z0-9]{1,6}-[A-Z0-9][A-Z0-9()\-/.]{1,22}$/;
+export const PART_RE = /^(?=.*\d)(?=.*[A-Z])[A-Z][A-Z0-9]{1,6}-[A-Z0-9][A-Z0-9()\-/.]{1,22}$/;
+/** a part number written on a drawing line, e.g. "(3A) CP30FM-1P003WA" -> "CP30FM-1P003WA" */
+export const partOfLine = (line) => { const s = String(line).trim().replace(/^\(\d+A\)\s*/, ''); return PART_RE.test(s) && !hasJapanese(s) ? s : null; };
+/** part numbers in a text block; a number broken after a hyphen continues on the next line ("S8VK-" / "G24024") */
+export function partsOfText(text) {
+  const lines = String(text).split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean), out = [];
+  for (let i = 0; i < lines.length; i++) {
+    let l = lines[i];
+    while (l.endsWith('-') && i + 1 < lines.length) l += lines[++i];
+    const p = partOfLine(l);
+    if (p) out.push(p);
+  }
+  return out;
+}
 
 // part-number prefix -> [maker, category]
 const FAMILY = [
@@ -53,9 +66,7 @@ export function buildCatalog({ modules = [], cabinets = [], index = null }) {
     e.tags.add(x.tag); e.sources.add('cabinet ' + c.id);
   }
   if (index) for (const pg of index.pages.values()) for (const t of pg.texts) {
-    for (const line of String(t.text).split(/[\r\n]+/)) {
-      const s = line.trim().replace(/^\(\d+A\)\s*/, '');
-      if (!PART_RE.test(s) || hasJapanese(s)) continue;
+    for (const s of partsOfText(t.text)) {
       const e = get(s);
       e.sheets.set(pg.id, (e.sheets.get(pg.id) || 0) + 1);
       e.sources.add('drawing');

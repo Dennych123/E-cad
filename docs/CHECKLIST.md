@@ -33,18 +33,20 @@ and index exactly like the import (tested on all 27 pages).
 | New page (same frame), rename page, delete page | [x] | Sheets tab `+`, Inspector |
 | Print / PDF at true page size, export SVG | [x] | `Ctrl+P` |
 | Language: Japanese drawings shown in English (164/164 strings), switch back to JA | [x] | `Alt+L` |
-| Resize handles, vertex editing of wires/lines | [ ] | |
-| Group / ungroup | [ ] | |
+| Resize handles (rect, ellipse; Shift keeps proportions), vertex editing of wires/lines: drag a corner, drag a wire segment (stays orthogonal, ends stay on their pins), add a point on a line, double-click a point to remove it | [x] | select one shape |
+| Group / ungroup (a click selects the group, Ctrl+click one member) | [x] | `Ctrl+G` / `Ctrl+Shift+G` |
 | Layers panel (show/lock per layer) | [ ] background only | |
-| Line style editor (dash, arrowheads, colour), fill colour, font | [~] weight only | |
-| Format painter | [ ] | |
+| Line style editor (colour, weight, pattern, arrowheads), fill colour, text colour/size/font/align/bold; works on a multi-selection | [x] | Inspector → Format |
+| Format painter | [x] | `Ctrl+Shift+C` / `Ctrl+Shift+V` |
 | Rulers and guides | [ ] (grid only) | |
 | Connector re-routing around shapes | [ ] | |
-| Page reorder, page size/orientation setup, duplicate page | [ ] | |
+| Duplicate page | [x] | Inspector, right-click a sheet |
+| Page reorder, page size/orientation setup | [ ] | |
 | Insert image, tables | [ ] | |
 | Round-trip to .vsdx (export back to Visio) | [ ] (import only) | |
 | Comments / review, version history UI | [ ] (saves carry rev + conflict check) | |
-| Find & replace text, spell check | [ ] | |
+| Find & replace text on a sheet (match case, whole word; replace all = one undo) | [x] | `Ctrl+H` |
+| Spell check | [ ] | |
 
 ## 1. Schematic fundamentals (SKYCAD Standard)
 - [x] Sheets with title block (imported frame; new sheets copy the frame)
@@ -81,7 +83,7 @@ and index exactly like the import (tested on all 27 pages).
 ## 5. Parts, catalogue, BOM (SKYCAD Standard)
 - [~] Parts catalogue: 58 part numbers merged from modules, cabinets and the drawings, with maker, category, footprint, tags, symbols (Components tab); no prices yet
 - [~] Parts known per module (Fuji AH165-*, IDEC XW1E, Omron NX/S8VK, SMC JXC, Misumi cable)
-- [ ] BOM / parts list real-time, grouped by P/N and by location (1CE, 2PB), Excel export
+- [x] BOM grouped by part number and by location, Excel export (`/api/export/<p>/bom.xlsx`, Parts tab, `tools/export.js`); quantity = listed devices, labels counted only when nothing is listed, "check" when the drawings show more
 - [ ] Accessories from box templates into BOM (handle, fan, plates) — data exists
 
 ## 6. Panel layout (SKYCAD Advanced)
@@ -96,7 +98,7 @@ and index exactly like the import (tested on all 27 pages).
 
 ## 7. Wires & cables (SKYCAD Advanced)
 - [ ] Wire processing: colour, gauge (0.5mm² BLUE, 2.5mm² G/Y…), part number per wire
-- [~] From–to wire list derived from the drawings' nets (24 wires for 1CE: PLC input rungs, P24A chain, power), mark = PLC address `0000 00`
+- [~] From–to wire list derived from the drawings' nets (24 wires for 1CE: PLC input rungs, P24A chain, power), mark = PLC address `0000 00`; [x] Excel export per cabinet with routed lengths
 - [ ] Wire labels (marking sleeves) CSV + printable PDF
 - [~] Cable schedule: 2PB cable VCTF23NX-0.5-20-5 cores 1–20 (module data)
 - [ ] Shield management, cable list report

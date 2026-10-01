@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { symPoint, moved, rotated, elementShapes, elementBox, docToRawPage, symbolElement, PT } from '../lib/sheetdoc.js';
+import { symPoint, moved, rotated, elementShapes, elementBox, docToRawPage, symbolElement, PT, resized, cleanPts, dragWireVertex, dragWireEnd, dragWireSegment, insertVertex, removeVertex } from '../lib/sheetdoc.js';
 import { indexPage } from '../lib/sheetindex.js';
 import { buildDict, translate } from '../lib/i18n.js';
 import { createDocStore, splitVisioSvg } from '../server/docs.js';
@@ -30,6 +30,34 @@ export default function (t) {
     t.eq(moved({ kind: 'wire', pts: [[0, 0], [10, 0]] }, 5, 7).pts, [[5, 7], [15, 7]]);
     const v = moved({ kind: 'visio', dx: 1, dy: 2, shapes: [] }, 3, 4);
     t.eq([v.dx, v.dy], [4, 6]);
+  });
+
+  t('resize: rect and ellipse take the new box', () => {
+    t.eq(resized({ kind: 'rect', x: 0, y: 0, w: 10, h: 10 }, [5, 6, 20, 30]), { kind: 'rect', x: 5, y: 6, w: 20, h: 30 });
+    const e = resized({ kind: 'ellipse', cx: 0, cy: 0, rx: 1, ry: 1 }, [10, 20, 40, 10]);
+    t.eq([e.cx, e.cy, e.rx, e.ry], [30, 25, 20, 5]);
+  });
+
+  t('wire editing keeps wires orthogonal and never moves a wire end off its pin', () => {
+    t.eq(cleanPts([[0, 0], [0, 0], [5, 0], [10, 0], [10, 5]]), [[0, 0], [10, 0], [10, 5]]);
+    // U-shaped wire: pin A (0,0) -> (0,20) -> (30,20) -> pin B (30,0)
+    const U = [[0, 0], [0, 20], [30, 20], [30, 0]];
+    // drag the bottom run (segment 1) down by 10: corners follow, pins stay
+    t.eq(dragWireSegment(U, 1, 99, 10), [[0, 0], [0, 30], [30, 30], [30, 0]]);
+    // drag the first leg (segment 0, ends on pin A) sideways: pin A keeps a jog
+    t.eq(dragWireSegment(U, 0, 5, 0), [[0, 0], [5, 0], [5, 20], [30, 20], [30, 0]]);
+    // a straight two-point wire dragged sideways becomes a U, both ends stay
+    t.eq(dragWireSegment([[0, 0], [20, 0]], 0, 0, 10), [[0, 0], [0, 10], [20, 10], [20, 0]]);
+    // inner corner moved: both neighbours slide, ends untouched (jogs where a neighbour is an end)
+    t.eq(dragWireVertex(U, 1, [10, 25]), [[0, 0], [10, 0], [10, 25], [30, 25], [30, 0]]);
+    // moving an end: the run next to it follows
+    t.eq(dragWireEnd(U, 0, [0, 5]), [[0, 5], [0, 20], [30, 20], [30, 0]]);
+    t.eq(dragWireEnd(U, 0, [-5, 0]), [[-5, 0], [-5, 20], [30, 20], [30, 0]]);
+    // a straight wire whose end moves off-axis gets an L, far end and its run kept
+    t.eq(dragWireEnd([[0, 0], [20, 0]], 0, [5, 10]), [[5, 10], [5, 0], [20, 0]]);
+    t.eq(insertVertex([[0, 0], [10, 0]], 0, [5, 3]), [[0, 0], [5, 3], [10, 0]]);
+    t.eq(removeVertex([[0, 0], [5, 3], [10, 0]], 1), [[0, 0], [10, 0]]);
+    t.eq(removeVertex([[0, 0], [10, 0]], 1), [[0, 0], [10, 0]], 'a line keeps two points');
   });
 
   t('a placed symbol reaches the indexer as a group with its tag inside (device ownership works)', () => {

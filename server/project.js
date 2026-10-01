@@ -9,6 +9,8 @@ import { buildSheetIndex } from './sheets.js';
 import { cabinetWires, sheetNets } from './connections.js';
 import { buildCatalog } from './components.js';
 import { runChecks, RULES } from './checks.js';
+import { buildBom, bomSheets, wireSheets } from './bom.js';
+import { xlsx } from '../lib/xlsx.js';
 import { routeWires } from '../lib/route.js';
 import { buildDict, translate } from '../lib/i18n.js';
 import { buildNets, labelsOfNet } from '../lib/nets.js';
@@ -68,11 +70,9 @@ export function createProjectContext(root) {
       return [...read('library.json'), ...read('custom.json')].filter((s) => !s.hidden).map(({ instances, ...s }) => s);
     },
     catalog(project) {
-      const mdir = path.join(P(project), 'modules');
-      const modules = fs.existsSync(mdir) ? fs.readdirSync(mdir).filter((f) => f.endsWith('.yaml')).map((f) => ({ id: f.slice(0, -5), ...readYaml(path.join(mdir, f)) })) : [];
       const cabinets = store.cabinets(project).map((c) => ({ id: c, ...store.cabinet(project, c) }));
       const parts = store.parts();
-      return buildCatalog({ modules, cabinets, index: ctx.index(project) }).map((c) => ({ ...c, model: parts[c.part]?.model || null }));
+      return buildCatalog({ modules: ctx.modules(project), cabinets, index: ctx.index(project) }).map((c) => ({ ...c, model: parts[c.part]?.model || null }));
     },
     wires(project, cabinet) {
       const cab = store.cabinet(project, cabinet);
@@ -90,13 +90,25 @@ export function createProjectContext(root) {
       const s = slot(project);
       if (!s.check) {
         const index = ctx.index(project);
-        const savedDocs = index.drawings.flatMap((d) => d.pages).filter((p) => docs.saved(project, p.id)).map((p) => docs.get(project, p.id));
+        const savedDocs = ctx.savedDocs(project);
         const cabinets = store.cabinets(project).map((c) => ({ id: c, ...store.cabinet(project, c) }));
         s.check = { ...runChecks({ index, cabinets, docs: savedDocs, dict: ctx.dict(project), loads: ctx.loads(project) }), at: new Date().toISOString() };
       }
       return s.check;
     },
     sheetNets: (project) => sheetNets(ctx.index(project)),
+    modules(project) {
+      const mdir = path.join(P(project), 'modules');
+      return fs.existsSync(mdir) ? fs.readdirSync(mdir).filter((f) => f.endsWith('.yaml')).map((f) => ({ id: f.slice(0, -5), ...readYaml(path.join(mdir, f)) })) : [];
+    },
+    savedDocs(project) { return ctx.index(project).drawings.flatMap((d) => d.pages).filter((p) => docs.saved(project, p.id)).map((p) => docs.get(project, p.id)); },
+    /** bill of materials: one row per part number, quantity = devices using it (see server/bom.js) */
+    bom(project) {
+      const s = slot(project);
+      return (s.bom ||= buildBom({ modules: ctx.modules(project), cabinets: store.cabinets(project).map((c) => ({ id: c, ...store.cabinet(project, c) })), index: ctx.index(project), docs: ctx.savedDocs(project) }));
+    },
+    bomXlsx(project) { return xlsx(bomSheets(ctx.bom(project), { project }), { title: `${project} bill of materials` }); },
+    wiresXlsx(project, cabinet) { return xlsx(wireSheets(ctx.wires(project, cabinet).wires, { project, cabinet }), { title: `${project} wire list ${cabinet}` }); },
   };
   return ctx;
 }

@@ -81,7 +81,19 @@ const GET = [
   [/^\/api\/search\/([^/]+)$/, (m, q) => ctx.search(dec(m[1]), q.get('q'))],
   [/^\/api\/check\/([^/]+)$/, (m) => ctx.check(dec(m[1]))],
   [/^\/api\/nets\/([^/]+)\/(.+)$/, (m, q) => ctx.nets(dec(m[1]), dec(m[2]), q.get('label'))],
+  [/^\/api\/bom\/([^/]+)$/, (m) => ctx.bom(dec(m[1]))],
 ];
+
+// Excel downloads: /api/export/<project>/bom.xlsx, /api/export/<project>/wires/<cabinet>.xlsx
+const FILES = [
+  [/^\/api\/export\/([^/]+)\/bom\.xlsx$/, (m) => ({ name: `${dec(m[1])} BOM.xlsx`, data: ctx.bomXlsx(dec(m[1])) })],
+  [/^\/api\/export\/([^/]+)\/wires\/([^/]+)\.xlsx$/, (m) => ({ name: `${dec(m[1])} wires ${dec(m[2])}.xlsx`, data: ctx.wiresXlsx(dec(m[1]), dec(m[2])) })],
+];
+function sendFile(res, { name, data }) {
+  res.writeHead(200, { 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'Cache-Control': 'no-store',
+    'Content-Disposition': `attachment; filename="${name.replace(/[^\w .()-]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}` });
+  res.end(Buffer.from(data));
+}
 
 const WRITE = [
   // save a sheet document; baseRev guards against overwriting a newer save from another window
@@ -142,6 +154,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/') { res.writeHead(302, { Location: '/web/index.html' }); return res.end(); }
     if (req.method === 'GET') {
       for (const [re, fn] of GET) { const m = re.exec(url.pathname); if (m) return json(res, 200, fn(m, url.searchParams)); }
+      for (const [re, fn] of FILES) { const m = re.exec(url.pathname); if (m) return sendFile(res, fn(m)); }
       if (serveStatic(res, url.pathname)) return;
       return json(res, 404, { error: 'not found' });
     }

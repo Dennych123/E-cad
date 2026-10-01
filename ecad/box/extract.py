@@ -28,7 +28,7 @@ def _join_part(parts: list[str]) -> str:
 
 
 def parse_label(text: str) -> tuple[str, str | None]:
-    """'CR\\nRB\\n1A' -> ('CRRB1A', None); 'CV1\\n\\nS8VK-\\nX12024A-EIP' -> ('CV1', 'S8VK-X12024A-EIP')."""
+    """'CR\\nAB\\n1A' -> ('CRAB1A', None); 'PS1\\n\\nS8VK-\\nG24024' -> ('PS1', 'S8VK-G24024')."""
     ls = _lines(text)
     if not ls:
         return "", None
