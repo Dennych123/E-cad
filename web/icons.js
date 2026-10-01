@@ -51,6 +51,7 @@ const P = {
   group: '<rect x="2" y="2" width="12" height="12" rx="1" stroke-dasharray="2 1.6"/><rect x="4.5" y="4.5" width="4" height="4" rx=".5"/><rect x="7.5" y="7.5" width="4" height="4" rx=".5"/>',
   ungroup: '<rect x="2.5" y="2.5" width="5" height="5" rx=".5"/><rect x="8.5" y="8.5" width="5" height="5" rx=".5"/><path d="M10 3.5h2.5V6M6 12.5H3.5V10"/>',
   paint: '<rect x="2.5" y="2.5" width="9" height="4" rx="1"/><path d="M11.5 4.5h2v3.5H8v2"/><rect x="7" y="10" width="2" height="4" rx=".5"/>',
+  history: '<path d="M2.8 8a5.2 5.2 0 105.2-5.2A5.2 5.2 0 003.6 5.3"/><path d="M2.5 2.8v2.7h2.7M8 5.2V8l2 1.5"/>',
   report: '<path d="M4 2.5h5.5L12 5v8.5H4z"/><path d="M9.5 2.5V5H12M6 8h4M6 10h4M6 12h2.5"/>',
   shield: '<path d="M8 1.8l5 2v4c0 3.2-2.1 5.4-5 6.4-2.9-1-5-3.2-5-6.4v-4z"/><path d="M5.6 8.1l1.7 1.7 3.2-3.4"/>',
   cursor: '<path d="M8 2v4M8 10v4M2 8h4M10 8h4"/>',

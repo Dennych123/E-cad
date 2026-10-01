@@ -93,7 +93,13 @@ export function createProjectContext(root) {
         const index = ctx.index(project);
         const savedDocs = ctx.savedDocs(project);
         const cabinets = store.cabinets(project).map((c) => ({ id: c, ...store.cabinet(project, c) }));
-        s.check = { ...runChecks({ index, cabinets, docs: savedDocs, dict: ctx.dict(project), loads: ctx.loads(project) }), at: new Date().toISOString() };
+        const layouts = cabinets.map((c) => {
+          let box = null, routes = [];
+          try { box = store.box(c.box, project); } catch { /* cabinet without a box template */ }
+          try { routes = ctx.wires(project, c.id).wires.map((w) => w.route).filter(Boolean); } catch { /* no wires derivable */ }
+          return { id: c.id, plate: box?.plate ? { width: box.plate.width, height: box.plate.height } : null, ducts: box?.plate?.ducts || [], components: c.components || [], routes };
+        });
+        s.check = { ...runChecks({ index, cabinets, docs: savedDocs, dict: ctx.dict(project), loads: ctx.loads(project), layouts }), at: new Date().toISOString() };
       }
       return s.check;
     },

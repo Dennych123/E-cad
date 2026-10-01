@@ -349,7 +349,7 @@ function renderInspector() {
   if (!list.length) {
     const ix = editor.index;
     html += `<div class="section"><h4>Sheet</h4><div class="kv"><span>Name</span><span>${esc(tr(doc.name))}</span><span>Size</span><span class="mono">${num(doc.widthMm)} × ${num(doc.heightMm)} mm</span><span>Shapes</span><span>${doc.elements.length}</span><span>State</span><span>${editor.dirty ? 'Unsaved changes' : doc.saved ? 'Saved' : 'Imported, not saved yet'}</span>${ix ? `<span>Lines</span><span>${ix.rows.length ? `${esc(ix.rows[0].label)} … ${esc(ix.rows.at(-1).label)}` : '—'}</span>` : ''}</div>
-      <div class="row" style="margin-top:12px"><button class="btn solid" data-act="rename">${icon('text')}Rename</button><button class="btn solid" data-cmd="duplicateSheet">${icon('copy')}Duplicate</button>${doc.saved && doc.source === null ? `<button class="btn solid danger" data-act="deleteSheet">${icon('trash')}Delete</button>` : ''}</div></div>
+      <div class="row" style="margin-top:12px;flex-wrap:wrap"><button class="btn solid" data-act="rename">${icon('text')}Rename</button><button class="btn solid" data-cmd="duplicateSheet">${icon('copy')}Duplicate</button><button class="btn solid" data-cmd="sheetHistory" data-tip="Earlier saved versions">${icon('history')}History</button>${doc.saved && doc.source === null ? `<button class="btn solid danger" data-act="deleteSheet">${icon('trash')}Delete</button>` : ''}</div></div>
       <div class="section"><h4>Tips</h4><div class="faint" style="line-height:1.6">Click a shape to see its cross-reference and net. Double-click text to edit it, or an L-number arrow to jump to that line. Drag symbols in from the Symbols tab. <kbd>${keyLabel('mod+k')}</kbd> lists every command.</div></div>`;
   } else if (list.length > 1) {
     const g = editor.selectionGroup();
@@ -645,6 +645,21 @@ command({ id: 'duplicateSheet', title: 'Duplicate sheet', group: 'Sheet', icon: 
     const r = await api(`/api/page/${encodeURIComponent(project())}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, drawing: dr?.file || 'custom', copyOf: state.sheet }) });
     await refreshDrawings(); await openSheet(r.id); toast('Sheet duplicated'); runCheck({ quiet: true });
   } catch (e) { toast(e.message, { kind: 'err' }); }
+} });
+command({ id: 'sheetHistory', title: 'Sheet history…', group: 'Sheet', icon: 'history', when: in2d, run: async () => {
+  const list = await api(`/api/history/${P()}/${encodeURIComponent(state.sheet)}`).catch(() => []);
+  const a = document.querySelector('#inspector [data-cmd=sheetHistory]') || $('#paletteBtn');
+  if (!list.length) { toast('No earlier versions yet — every Save keeps the one it replaces', { kind: 'info', duration: 2600 }); return; }
+  const when = (s) => (s ? new Date(s).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '');
+  menu(list.map((h) => ({
+    label: h.rev === 'import' ? 'Original import (Visio)' : `Revision ${h.rev} · ${when(h.savedAt)} · ${h.shapes} shapes`, icon: h.rev === 'import' ? 'sheet' : 'history',
+    run: async () => {
+      const what = h.rev === 'import' ? 'the original import' : `revision ${h.rev}`;
+      if (!(await confirmDialog(`Restore ${what}?`, `The sheet takes the shapes of ${what}. Undo brings your current version back; Save keeps the restored one.`, 'Restore'))) return;
+      try { const d = await api(`/api/revision/${P()}/${h.rev}/${encodeURIComponent(state.sheet)}`); editor.restore(d.elements, `Restore ${what}`); toast(`Restored ${what} — Save to keep it`, { kind: 'info', duration: 2600 }); }
+      catch (e) { toast(e.message, { kind: 'err' }); }
+    },
+  })), { anchor: a });
 } });
 command({ id: 'rename', title: 'Rename sheet', group: 'Sheet', icon: 'text', when: in2d, run: async () => {
   const name = await prompt('Rename sheet', tr(editor.doc.name), 'Rename'); if (!name || name === editor.doc.name) return;

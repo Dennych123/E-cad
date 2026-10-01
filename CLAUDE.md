@@ -23,6 +23,9 @@ Architecture decisions: `docs/ARCHITECTURE.md`. Feature checklist vs SKYCAD Elec
   only DOM nodes whose element object changed. Never mutate an element in place.
 - Documents are built from the import on first open and saved to `projects/<p>/sheets/<drawing>/<page>.json`
   (atomic write, `rev` + 409 on conflicting saves). Only this PC may write (`--lan-edit` to allow the LAN).
+  Each save first copies the replaced version to `projects/<p>/history/<drawing>/<page>/<rev>.json` (30 kept).
+- Inputs opened by a click (text tool) open after the press (`setTimeout`): the browser focuses the stage on
+  mousedown, which would blur and close them.
 - Visio markup needs `xmlns:v`, `xmlns:xlink`, `xmlns:ev` wherever it is parsed; its export also contains the
   background page with colliding shape ids (`shapeN-` / `groupN-`): only `foregroundPage` children are shapes.
 - Translation is display-only: `<text>` nodes are replaced in the DOM and shrunk with a transform about their

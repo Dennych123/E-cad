@@ -92,6 +92,14 @@ export function createDocStore(root) {
   const docFile = (project, id) => path.join(P(project), 'sheets', ...check(id).split('/')) + '.json';
   const rawFile = (project, id) => path.join(P(project), 'raw', ...check(id).split('/')) + '.json';
   const svgFile = (project, id) => path.join(P(project), 'raw', ...check(id).split('/')) + '.svg';
+  // earlier saved versions: projects/<p>/history/<drawing>/<page>/<rev>.json, newest HISTORY_KEEP kept
+  const histDir = (project, id) => path.join(P(project), 'history', ...check(id).split('/'));
+  const HISTORY_KEEP = 30;
+  const importDoc = (project, id) => {
+    const raw = JSON.parse(fs.readFileSync(rawFile(project, id), 'utf8'));
+    const sf = svgFile(project, id);
+    return visioToDoc(raw, fs.existsSync(sf) ? fs.readFileSync(sf, 'utf8') : '<svg viewBox="0 0 0 0"></svg>', id);
+  };
 
   const store = {
     has: (project, id) => fs.existsSync(docFile(project, id)) || fs.existsSync(rawFile(project, id)),
@@ -99,11 +107,8 @@ export function createDocStore(root) {
     get(project, id) {
       const f = docFile(project, id);
       if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, 'utf8'));
-      const rf = rawFile(project, id);
-      if (!fs.existsSync(rf)) throw new Error('no such sheet: ' + id);
-      const raw = JSON.parse(fs.readFileSync(rf, 'utf8'));
-      const sf = svgFile(project, id);
-      return visioToDoc(raw, fs.existsSync(sf) ? fs.readFileSync(sf, 'utf8') : '<svg viewBox="0 0 0 0"></svg>', id);
+      if (!fs.existsSync(rawFile(project, id))) throw new Error('no such sheet: ' + id);
+      return importDoc(project, id);
     },
     /** raw page for indexing: straight from the import when the sheet was never edited (fast) */
     rawPage(project, id) {
@@ -117,6 +122,14 @@ export function createDocStore(root) {
         const cur = JSON.parse(fs.readFileSync(f, 'utf8'));
         if ((cur.rev || 0) !== baseVersion) throw Object.assign(new Error('the sheet changed since you opened it'), { code: 409, rev: cur.rev || 0 });
       }
+      // keep the version being replaced
+      if (fs.existsSync(f)) {
+        const prev = fs.readFileSync(f, 'utf8'), prevRev = JSON.parse(prev).rev || 0, hd = histDir(project, id);
+        fs.mkdirSync(hd, { recursive: true });
+        fs.writeFileSync(path.join(hd, `${prevRev}.json`), prev);
+        const old = fs.readdirSync(hd).filter((x) => /^\d+\.json$/.test(x)).sort((a, b) => parseInt(b) - parseInt(a)).slice(HISTORY_KEEP);
+        for (const x of old) fs.rmSync(path.join(hd, x), { force: true });
+      }
       doc.rev = (doc.rev || 0) + 1;
       doc.savedAt = new Date().toISOString();
       fs.mkdirSync(path.dirname(f), { recursive: true });
@@ -124,6 +137,23 @@ export function createDocStore(root) {
       fs.writeFileSync(tmp, JSON.stringify(doc));
       fs.renameSync(tmp, f);                                        // atomic replace
       return { rev: doc.rev, savedAt: doc.savedAt };
+    },
+    /** earlier versions of a sheet, newest first; `import` = the Visio original when the sheet came from one */
+    history(project, id) {
+      const hd = histDir(project, id), out = [];
+      if (fs.existsSync(hd)) for (const x of fs.readdirSync(hd).filter((n) => /^\d+\.json$/.test(n))) {
+        try { const j = JSON.parse(fs.readFileSync(path.join(hd, x), 'utf8')); out.push({ rev: j.rev || 0, savedAt: j.savedAt || null, name: j.name, shapes: (j.elements || []).length }); } catch { /* unreadable: skip */ }
+      }
+      out.sort((a, b) => b.rev - a.rev);
+      if (fs.existsSync(rawFile(project, id))) out.push({ rev: 'import', savedAt: null, name: null, shapes: null });
+      return out;
+    },
+    revision(project, id, rev) {
+      if (rev === 'import') return importDoc(project, id);
+      if (!/^\d+$/.test(String(rev))) throw new Error('bad revision: ' + rev);
+      const f = path.join(histDir(project, id), `${rev}.json`);
+      if (!fs.existsSync(f)) throw new Error(`revision ${rev} of ${id} is not kept`);
+      return JSON.parse(fs.readFileSync(f, 'utf8'));
     },
     remove(project, id) { const f = docFile(project, id); if (fs.existsSync(f)) fs.renameSync(f, f + '.deleted'); },
     /** pages: every imported non-background page plus every saved document, per drawing folder */

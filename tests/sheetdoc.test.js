@@ -60,6 +60,25 @@ export default function (t) {
     t.eq(removeVertex([[0, 0], [10, 0]], 1), [[0, 0], [10, 0]], 'a line keeps two points');
   });
 
+  t('sheet history: every save keeps the version it replaces (newest 30); a conflicting save is refused', () => {
+    const name = `_hist${process.pid}`, dir = path.join(root, 'projects', name);
+    const docs = createDocStore(root);
+    try {
+      const id = 'custom/s01';
+      let rev = 0;                                // like the editor: send the rev you opened, the store bumps it
+      for (let i = 1; i <= 33; i++) rev = docs.put(name, id, { id, name: `v${i}`, elements: Array.from({ length: i }, (_, k) => ({ id: k, kind: 'text' })), rev }, i === 1 ? null : rev).rev;
+      t.eq(rev, 33);
+      const h = docs.history(name, id);
+      t.eq(h.length, 30, 'newest 30 kept');
+      t.eq([h[0].rev, h.at(-1).rev], [32, 3]);
+      t.eq(docs.revision(name, id, 32).name, 'v32');
+      t.eq(docs.revision(name, id, 5).elements.length, 5);
+      t.throws(() => docs.revision(name, id, 1), 'revision 1 was pruned');
+      t.throws(() => docs.put(name, id, { id, name: 'stale', elements: [] }, 7), 'a save based on an old revision is refused');
+      t.eq(docs.get(name, id).name, 'v33');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
   t('a placed symbol reaches the indexer as a group with its tag inside (device ownership works)', () => {
     const e = symbolElement(SYM, 1000000, 100, 200, { tag: 'CR7' });
     const shapes = elementShapes(e, doc);

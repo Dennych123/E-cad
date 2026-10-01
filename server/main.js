@@ -82,6 +82,8 @@ const GET = [
   [/^\/api\/check\/([^/]+)$/, (m) => ctx.check(dec(m[1]))],
   [/^\/api\/nets\/([^/]+)\/(.+)$/, (m, q) => ctx.nets(dec(m[1]), dec(m[2]), q.get('label'))],
   [/^\/api\/bom\/([^/]+)$/, (m) => ctx.bom(dec(m[1]))],
+  [/^\/api\/history\/([^/]+)\/(.+)$/, (m) => docs.history(dec(m[1]), dec(m[2]))],
+  [/^\/api\/revision\/([^/]+)\/(import|\d+)\/(.+)$/, (m) => docs.revision(dec(m[1]), dec(m[3]), m[2])],
   [/^\/api\/terminals\/([^/]+)\/([^/]+)$/, (m) => ctx.terminals(dec(m[1]), dec(m[2]))],
   [/^\/api\/labels\/([^/]+)\/([^/]+)$/, (m) => ctx.labels(dec(m[1]), dec(m[2]))],
 ];

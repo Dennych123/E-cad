@@ -236,6 +236,30 @@ export default function (t) {
     } finally { tp.dispose(); }
   });
 
+  t('editor: sheet history keeps every saved version; restoring one (or the import) is undoable', async () => {
+    ready();
+    const tp = tempProject();
+    try {
+      await withApp(tp.name, async (b) => {
+        const n0 = await b.eval(`${E}.doc.elements.length`);
+        const addText = async (txt) => { await key(b, 't'); await b.click(...(await scr(b, 1050, 1000 + n0 % 7))); await b.send('Input.insertText', { text: txt }); await key(b, 'Enter'); await key(b, 'Escape'); };
+        await addText('FIRST'); await key(b, 's', 2); await b.waitFor(`!${E}.dirty`, 8000);
+        await addText('SECOND'); await key(b, 's', 2); await b.waitFor(`!${E}.dirty && ${E}.doc.rev === 2`, 8000);
+        const h = await b.eval(`fetch('/api/history/${tp.name}/' + encodeURIComponent('${SHEET}')).then((r) => r.json())`);
+        t.eq(h.map((x) => x.rev), [1, 'import'], 'rev 1 kept when rev 2 was saved; the import is always there');
+        const texts = () => b.eval(`${E}.doc.elements.filter((e) => e.kind === 'text').map((e) => e.text)`);
+        t.eq(await texts(), ['FIRST', 'SECOND']);
+        await b.eval(`fetch('/api/revision/${tp.name}/1/' + encodeURIComponent('${SHEET}')).then((r) => r.json()).then((d) => ${E}.restore(d.elements, 'Restore revision 1'))`);
+        t.eq(await texts(), ['FIRST']);
+        await b.eval(`fetch('/api/revision/${tp.name}/import/' + encodeURIComponent('${SHEET}')).then((r) => r.json()).then((d) => ${E}.restore(d.elements, 'Restore import'))`);
+        t.eq([await texts(), await b.eval(`${E}.doc.elements.length`)], [[], n0], 'back to the Visio import');
+        await key(b, 'z', 2); await key(b, 'z', 2);
+        t.eq(await texts(), ['FIRST', 'SECOND'], 'undo brings the current version back');
+        t.eq(b.errors(), []);
+      });
+    } finally { tp.dispose(); }
+  });
+
   t('editor: place a symbol, glue a wire to it, move it, undo, save, reload - and the index knows the new tag', async () => {
     ready();
     const tp = tempProject();

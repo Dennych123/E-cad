@@ -19,6 +19,9 @@ export const RULES = [
   { id: 'drawing.dangling', title: 'No loose wire ends', severity: 'warning', help: 'A wire drawn in the editor ends on nothing (no pin, no other wire).' },
   { id: 'drawing.duplicate-tag', title: 'Placed symbols have unique tags', severity: 'error', help: 'Two symbols placed in the editor carry the same tag.' },
   { id: 'cabinet.not-in-drawing', title: 'Panel parts are on the drawings', severity: 'warning', help: 'A device placed in a cabinet does not appear on any sheet.' },
+  { id: 'cabinet.overlap', title: 'Panel parts do not overlap', severity: 'warning', help: 'Two parts on the mounting plate, or a part and a wiring duct, take the same place.' },
+  { id: 'cabinet.outside', title: 'Panel parts fit on the plate', severity: 'warning', help: 'A part reaches past the edge of the mounting plate.' },
+  { id: 'duct.fill', title: 'Wiring ducts not overfilled', severity: 'warning', help: 'Estimated fill of each duct from the routed wires: >70 % warning (no room for changes), >100 % error. Wire diameter from loads.yaml (wire_od_mm).' },
   { id: 'drawing.untranslated', title: 'Drawing text readable in English', severity: 'info', help: 'Japanese text with no English translation yet (add it to the i18n dictionary).' },
 ];
 
@@ -33,7 +36,7 @@ function pick(table, part) {
   return null;
 }
 
-export function runChecks({ index, cabinets = [], docs = [], dict = new Map(), loads = {} }) {
+export function runChecks({ index, cabinets = [], docs = [], dict = new Map(), loads = {}, layouts = [] }) {
   const findings = [];
   const add = (rule, severity, message, where = [], data = undefined) => findings.push({ rule, severity, message, where, ...(data ? { data } : {}) });
   const schematic = new Set([...index.pages.values()].filter((p) => p.rows.length >= 5).map((p) => p.id));
@@ -211,6 +214,41 @@ export function runChecks({ index, cabinets = [], docs = [], dict = new Map(), l
     });
     if (missing.length) add('cabinet.not-in-drawing', 'warning', `cabinet ${c.id}: ${missing.length} device(s) on no schematic: ${missing.slice(0, 12).map((x) => x.tag).join(', ')}${missing.length > 12 ? ', …' : ''}`,
       missing.map((x) => ({ cabinet: c.id, key: String(x.tag).toUpperCase() })), { tags: missing.map((x) => x.tag) });
+  }
+
+  // ---------------------------------------------------------------- cabinet layout
+  // layouts: [{ id, plate: { width, height }, ducts: [{ id, x, y, w, h, size }], components, routes }] (plate mm, y up)
+  const OVERLAP = 1;                                  // mm both ways: touching parts are fine
+  const inter = (a, b) => Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) > OVERLAP && Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) > OVERLAP;
+  const od = Number(loads.wire_od_mm) || 2.6;         // KIV 0.75 mm² outer diameter
+  if (!loads.wire_od_mm && layouts.some((l) => l.routes?.length)) assumptions.add(`wire outer diameter ${od} mm (KIV 0.75 mm²)`);
+  for (const L of layouts) {
+    const parts = (L.components || []).filter((c) => c.w > 0 && c.h > 0);
+    const at = (c) => ({ cabinet: L.id, key: String(c.tag).toUpperCase() });
+    const pairs = [];
+    for (let i = 0; i < parts.length; i++) for (let j = i + 1; j < parts.length; j++) if (inter(parts[i], parts[j])) pairs.push([parts[i], parts[j]]);
+    for (const [a, b] of pairs) {
+      // neighbours on one rail that overlap a little are usually outlines drawn wider than the part in the
+      // layout drawing (label boxes, clips): said as info; a real clash is a warning
+      const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x), share = ox / Math.min(a.w, b.w);
+      if (a.rail && a.rail === b.rail && share < 0.4) add('cabinet.overlap', 'info', `cabinet ${L.id}: ${a.tag} and ${b.tag} touch on rail ${a.rail} (${ox.toFixed(1)} mm) - check the real widths`, [at(a), at(b)], { mm: +ox.toFixed(1) });
+      else add('cabinet.overlap', 'warning', `cabinet ${L.id}: ${a.tag} and ${b.tag} overlap on the plate`, [at(a), at(b)], { mm: +ox.toFixed(1) });
+    }
+    for (const c of parts) for (const d of L.ducts || []) if (inter(c, d)) add('cabinet.overlap', 'warning', `cabinet ${L.id}: ${c.tag} sits on duct ${d.id}`, [at(c)], { duct: d.id });
+    if (L.plate) for (const c of parts) {
+      const over = Math.max(-c.x, -c.y, c.x + c.w - L.plate.width, c.y + c.h - L.plate.height);
+      if (over > OVERLAP) add('cabinet.outside', 'warning', `cabinet ${L.id}: ${c.tag} reaches ${Math.round(over)} mm past the plate edge`, [at(c)], { mm: Math.round(over) });
+    }
+    // duct fill: wires whose route runs inside a duct, against the duct's cross-section (WxxXHyy, minus walls)
+    for (const d of L.ducts || []) {
+      const m = /W(\d+)\s*X\s*H(\d+)/i.exec(d.size || '');
+      if (!m) continue;
+      const inside = (x, y) => x >= d.x - 0.5 && x <= d.x + d.w + 0.5 && y >= d.y - 0.5 && y <= d.y + d.h + 0.5;
+      const n = (L.routes || []).filter((r) => r.ok && r.points?.some((p, k) => k && inside((p[0] + r.points[k - 1][0]) / 2, (p[1] + r.points[k - 1][1]) / 2))).length;
+      if (!n) continue;
+      const area = Math.max(1, (Number(m[1]) - 4) * (Number(m[2]) - 4)), pct = Math.round(n * Math.PI * (od / 2) ** 2 / area * 100);
+      if (pct > 70) add('duct.fill', pct > 100 ? 'error' : 'warning', `cabinet ${L.id}: duct ${d.id} (${d.size}) estimated ${pct} % full with ${n} wires`, [{ cabinet: L.id, key: d.id }], { wires: n, percent: pct });
+    }
   }
 
   // ---------------------------------------------------------------- translation

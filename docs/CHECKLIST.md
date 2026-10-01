@@ -44,7 +44,8 @@ and index exactly like the import (tested on all 27 pages).
 | Page reorder, page size/orientation setup | [ ] | |
 | Insert image, tables | [ ] | |
 | Round-trip to .vsdx (export back to Visio) | [ ] (import only) | |
-| Comments / review, version history UI | [ ] (saves carry rev + conflict check) | |
+| Version history: every save keeps the version it replaces (newest 30), restore any of them or the original import (undoable) | [x] | Inspector → History |
+| Comments / review | [ ] | |
 | Find & replace text on a sheet (match case, whole word; replace all = one undo) | [x] | `Ctrl+H` |
 | Spell check | [ ] | |
 
@@ -145,11 +146,12 @@ One result feeds the Checks tab, sheet badges, status bar, `tools/check.js` (CI 
 - [x] PLC address wired twice (I/O unit sheets) — warning
 - [x] Editor sheets: loose wire ends — warning; duplicate tags — error
 - [x] Panel devices missing from every schematic — warning
+- [x] Panel layout: parts overlapping each other or a duct (small same-rail overlaps of drawn outlines = info), parts past the plate edge, duct fill from the routed wires (>70 % warning, >100 % error)
 - [x] Untranslated drawing text — info
 - [x] Web: Checks tab (summary, checklist, findings → jump to the spot), sheet badges, status bar count, re-check after save, `F7` / `Shift+F7`
 - [ ] Wire gauge vs protector rating (needs wire data), voltage drop on long runs
 - [ ] Output point current vs load (NX-OD 0.5 A/point) per PLC output
-- [ ] Terminal strip overfill, duct fill % from routed wires
+- [ ] Terminal strip overfill
 - [ ] Quick-fix actions (e.g. add a missing contact-table entry)
 
 ## Use cases to test end-to-end (acceptance)

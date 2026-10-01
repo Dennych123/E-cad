@@ -79,6 +79,26 @@ export default function (t) {
     t.ok(rulesHit(r).includes('drawing.duplicate-tag'));
   });
 
+  t('cabinet layout: clashes, parts past the plate, overfilled ducts', () => {
+    const p = page('s/p01', []);
+    const layouts = [{ id: 'C1', plate: { width: 300, height: 200 }, ducts: [{ id: 'D1', x: 0, y: 0, w: 300, h: 40, size: 'W40XH60' }],
+      components: [
+        { tag: 'K1', x: 10, y: 60, w: 30, h: 20, rail: 'R1' }, { tag: 'K2', x: 36, y: 60, w: 30, h: 20, rail: 'R1' },   // 4 mm: outline touch -> info
+        { tag: 'K3', x: 100, y: 60, w: 30, h: 20, rail: 'R1' }, { tag: 'K4', x: 110, y: 60, w: 30, h: 20, rail: 'R1' }, // 20 mm: clash
+        { tag: 'Q1', x: 200, y: 30, w: 40, h: 40, rail: 'R2' },                                                         // on the duct
+        { tag: 'Q2', x: 280, y: 150, w: 40, h: 40, rail: 'R3' },                                                        // 20 mm past the edge
+      ],
+      routes: Array.from({ length: 400 }, () => ({ ok: true, points: [[10, 20], [290, 20]] })) }];
+    const r = runChecks({ index: index([p]), loads, layouts });
+    const f = (rule) => r.findings.filter((x) => x.rule === rule);
+    t.eq(f('cabinet.overlap').map((x) => [x.severity, x.message.replace(/^cabinet C1: /, '')]), [
+      ['info', 'K1 and K2 touch on rail R1 (4.0 mm) - check the real widths'], ['warning', 'K3 and K4 overlap on the plate'], ['warning', 'Q1 sits on duct D1']]);
+    t.eq(f('cabinet.outside').map((x) => x.data.mm), [20]);
+    const fill = f('duct.fill')[0];
+    t.ok(fill && fill.severity === 'error' && fill.data.wires === 400 && fill.data.percent > 100, JSON.stringify(fill));
+    t.ok(r.assumptions.some((a) => /wire outer diameter/.test(a)), 'the assumed wire size is listed');
+  });
+
   // what the example drawings contain stays in the private project; here only properties that must hold
   t('example project: no false coil/short errors; real table mismatches found; budgets computed', () => {
     if (!fs.existsSync(path.join(root, 'projects', '6451-M014', 'raw'))) t.skip('project 6451-M014 not on this PC (confidential, not in git)');

@@ -437,7 +437,9 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
     if (tool === 'place' && placing) { placeAt(p); return; }
     if (tool === 'wire' || tool === 'line') { wireClick(p, e); return; }
     if (tool === 'rect' || tool === 'ellipse') { const s = snapPoint(p, { allowT: false }); drag = { kind: 'shape', x0: s.x, y0: s.y, x1: s.x, y1: s.y }; stage.setPointerCapture(e.pointerId); return; }
-    if (tool === 'text') { const s = snapPoint(p, { allowT: false }); newText(s.x, s.y); return; }
+    // the text box opens after this press: the browser moves focus to the stage on mousedown, which would
+    // blur (and close) a box opened right now
+    if (tool === 'text') { const s = snapPoint(p, { allowT: false }); setTimeout(() => newText(s.x, s.y)); return; }
     // select tool: handles of the selected shape first
     const hd = handleAt(p);
     if (hd && !e.shiftKey) { startHandle(hd, p, e); return; }
@@ -1084,6 +1086,8 @@ export function createEditor(stage, { api, project, onChange, onSelect, onCursor
     deleteSel, rotateSel, flipSel, zoomToSelection, selectionAsSymbol, reorder, align, nudge, copy, cut, paste, duplicate, selectAll, select, update, editSelectedText,
     startPlace, dropSymbol, setSymbols, setLanguage, focusShape, gotoRow, finishDraft, group, ungroup, selectionGroup,
     restyle, copyStyle, pasteStyle, reshape, get hasStyleClip() { return !!styleClip; },
+    /** put an earlier version's shapes on the sheet (one undo step; Save keeps it) */
+    restore(elements, label = 'Restore') { if (!doc) return; sel = new Set(); commit(structuredClone(elements), label); emitSelect(); },
     findText, showMatches, replaceText, clearMarks() { if (marks.length) { marks = []; drawOverlay(); } }, numberWires,
     get hasRows() { return !!pageIx?.rows.length; },
     async rename(name) { if (!doc) return; doc.name = name; saved = null; emitChange(); return save(); },
